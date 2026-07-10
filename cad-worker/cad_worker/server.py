@@ -57,6 +57,13 @@ app = FastAPI(
     description="Python 幾何引擎 Worker（build123d / OCCT）",
 )
 
+# 伺服 3D Viewer 靜態檔案（viewer.html＋Three.js assets）。
+# 讓 viewer 與 preview.glb 同源，避免 file:// 下 ES module 與 fetch 的 CORS 限制。
+_VIEWER_DIR = os.environ.get("OPENCAD_VIEWER_DIR")
+if _VIEWER_DIR and Path(_VIEWER_DIR).is_dir():
+    from fastapi.staticfiles import StaticFiles
+    app.mount("/viewer", StaticFiles(directory=_VIEWER_DIR, html=True), name="viewer")
+
 # 全域狀態
 projects: dict[str, dict[str, Any]] = {}  # project_id -> {graph, part, dir, manifest}
 
@@ -397,17 +404,62 @@ def _check_build123d() -> bool:
         return False
 
 
+def _watch_parent_process() -> None:
+    """監看父程序（Avalonia 主程式）——父程序結束時自我終止。
+
+    避免主程式被強制關閉（工作管理員、當機）時留下殭屍 Worker
+    佔用埠號，導致下次啟動綁定失敗。
+    """
+    parent_pid_str = os.environ.get("OPENCAD_PARENT_PID")
+    if not parent_pid_str:
+        return
+    parent_pid = int(parent_pid_str)
+
+    import threading
+    import time
+
+    def _pid_alive(pid: int) -> bool:
+        if os.name == "nt":
+            import ctypes
+            SYNCHRONIZE = 0x00100000
+            h = ctypes.windll.kernel32.OpenProcess(SYNCHRONIZE, False, pid)
+            if not h:
+                return False
+            # WaitForSingleObject 0ms：WAIT_TIMEOUT(258)=仍在執行
+            alive = ctypes.windll.kernel32.WaitForSingleObject(h, 0) == 258
+            ctypes.windll.kernel32.CloseHandle(h)
+            return alive
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+
+    def _watch() -> None:
+        while True:
+            time.sleep(3)
+            if not _pid_alive(parent_pid):
+                os._exit(0)
+
+    threading.Thread(target=_watch, daemon=True).start()
+
+
 def main() -> None:
     """啟動 CAD Worker Server。"""
     import uvicorn
+    # 埠號由主程式指定（避免殭屍程序佔用固定埠造成綁定失敗）；
+    # 手動啟動時預設 8765
+    port = int(os.environ.get("OPENCAD_WORKER_PORT", "8765"))
     print(f"OpenCad CAD Worker v0.1.0")
     print(f"工作目錄: {WORK_DIR}")
+    print(f"監聽埠: {port}")
     print(f"工作階段 Token: {SESSION_TOKEN}")
     if _TOKEN_FILE:
         print(f"Token 檔案: {_TOKEN_FILE}")
     print(f"已載入專案數: {len(projects)}")
     print(f"build123d 可用: {_check_build123d()}")
-    uvicorn.run(app, host="127.0.0.1", port=8765, log_level="info")
+    _watch_parent_process()
+    uvicorn.run(app, host="127.0.0.1", port=port, log_level="info")
 
 
 if __name__ == "__main__":

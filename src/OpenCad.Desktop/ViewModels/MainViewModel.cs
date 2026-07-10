@@ -9,6 +9,7 @@ using OpenCad.Infrastructure;
 using OpenCad.Llm;
 using OpenCad.MVVM;
 using OpenCad.Viewer;
+using Serilog;
 
 namespace OpenCad.Desktop.ViewModels;
 
@@ -167,13 +168,20 @@ public class MainViewModel : INotifyPropertyChanged
     }
 
     /// <summary>
+    /// 當 3D 視窗需要導航到新 URL 時觸發（Worker 就緒後改用同源伺服的 viewer）。
+    /// </summary>
+    public event Action<string>? ViewerNavigationRequested;
+
+    /// <summary>
     /// Worker 於背景啟動完成後掛載（視窗先顯示、Worker 後就緒）。
     /// 必須在 UI 執行緒呼叫。
     /// </summary>
-    public void AttachWorker(ICadWorker? worker, CadWorkerClient? workerClient)
+    public void AttachWorker(ICadWorker? worker, CadWorkerClient? workerClient, string? viewerUrl = null)
     {
         _worker = worker;
         _workerClient = workerClient;
+        if (!string.IsNullOrEmpty(viewerUrl))
+            ViewerNavigationRequested?.Invoke(viewerUrl);
         _ = DetectWorkerAsync();
     }
 
@@ -258,6 +266,7 @@ public class MainViewModel : INotifyPropertyChanged
             var exampleDir = FindExamplesDir();
             if (exampleDir == null)
             {
+                Log.Error("載入範例失敗：找不到範例目錄（BaseDirectory={Dir}）", AppContext.BaseDirectory);
                 Messages.Add(ChatMessage.Error("找不到範例目錄。"));
                 return;
             }
@@ -265,6 +274,7 @@ public class MainViewModel : INotifyPropertyChanged
             var featuresPath = Path.Combine(exampleDir, exampleName, "features.json");
             if (!File.Exists(featuresPath))
             {
+                Log.Error("載入範例失敗：找不到 {Path}", featuresPath);
                 Messages.Add(ChatMessage.Error($"找不到範例：{exampleName}"));
                 return;
             }
@@ -293,6 +303,7 @@ public class MainViewModel : INotifyPropertyChanged
                 var result = await _worker.ApplyCommandAsync(_projectId, command);
                 if (result.Status == "error")
                 {
+                    Log.Error("載入範例失敗：特徵 {Fid} — {Code} {Msg}", feature.FeatureId, result.ErrorCode, result.EngineMessage);
                     Messages.Add(ChatMessage.Error(
                         $"特徵 {feature.FeatureId} 建立失敗：{result.ErrorCode} — {result.EngineMessage}"));
                     return;
@@ -307,6 +318,7 @@ public class MainViewModel : INotifyPropertyChanged
         }
         catch (Exception ex)
         {
+            Log.Error(ex, "載入範例失敗");
             Messages.Add(ChatMessage.Error($"載入範例失敗：{ex.Message}"));
         }
         finally { IsBusy = false; }
@@ -323,6 +335,7 @@ public class MainViewModel : INotifyPropertyChanged
             var rebuild = await _worker.RebuildAsync(_projectId);
             if (rebuild.Status == "error")
             {
+                Log.Error("重建失敗：{Code} {Msg}", rebuild.ErrorCode, rebuild.EngineMessage);
                 Messages.Add(ChatMessage.Error(
                     $"重建失敗：{rebuild.ErrorCode} — {rebuild.EngineMessage}"));
                 return;
@@ -347,7 +360,10 @@ public class MainViewModel : INotifyPropertyChanged
                 ValidationText = $"驗證失敗：{ex.Message}";
             }
 
-            // 匯出 GLB 預覽
+            // 匯出 GLB 預覽——preview.glb 端點只回傳已生成的檔案，
+            // 必須先實際匯出，否則 404
+            await _worker.ExportAsync(_projectId, "glb");
+
             _rebuildCount++;
             if (_workerClient != null)
                 _workerClient.RebuildCount = _rebuildCount;
@@ -365,6 +381,7 @@ public class MainViewModel : INotifyPropertyChanged
         }
         catch (Exception ex)
         {
+            Log.Error(ex, "重建失敗");
             Messages.Add(ChatMessage.Error($"重建失敗：{ex.Message}"));
         }
         finally { IsBusy = false; }

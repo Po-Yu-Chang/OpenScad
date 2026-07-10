@@ -58,7 +58,11 @@ public class App : Avalonia.Application
                 return;
             }
 
-            _workerProcess = new CadWorkerProcess(workerDir, "python");
+            _workerProcess = new CadWorkerProcess(workerDir, "python")
+            {
+                // 讓 Worker 伺服 viewer 靜態檔案（與 GLB 同源，避免 CORS）
+                ViewerDir = AppContext.BaseDirectory,
+            };
             var started = await _workerProcess.StartAsync();
             if (!started || string.IsNullOrEmpty(_workerProcess.SessionToken))
             {
@@ -69,10 +73,11 @@ public class App : Avalonia.Application
                 return;
             }
 
-            var client = new CadWorkerClient("http://127.0.0.1:8765", _workerProcess.SessionToken);
+            var client = new CadWorkerClient($"http://127.0.0.1:{_workerProcess.Port}", _workerProcess.SessionToken);
             _cadWorker = client;
             Log.Information("CAD Worker 已連線");
-            await Dispatcher.UIThread.InvokeAsync(() => vm.AttachWorker(client, client));
+            var viewerUrl = $"http://127.0.0.1:{_workerProcess.Port}/viewer/viewer.html";
+            await Dispatcher.UIThread.InvokeAsync(() => vm.AttachWorker(client, client, viewerUrl));
         }
         catch (Exception ex)
         {

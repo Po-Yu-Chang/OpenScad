@@ -48,9 +48,15 @@ public partial class MainWindow : Window
 
                 // 訂閱 Messages 集合變更——自動捲到底
                 vm.Messages.CollectionChanged += OnMessagesChanged;
+
+                // Worker 就緒後導航到同源伺服的 viewer（避免 file:// 的 CORS 限制）
+                vm.ViewerNavigationRequested += url =>
+                {
+                    Dispatcher.UIThread.Post(() => webView.Url = new Uri(url));
+                };
             }
 
-            // 載入本地 viewer.html
+            // 先載入本地 viewer.html 作為佔位；Worker 就緒後會切換到 http 同源版本
             var htmlPath = Path.Combine(AppContext.BaseDirectory, "viewer.html");
             if (File.Exists(htmlPath))
             {
