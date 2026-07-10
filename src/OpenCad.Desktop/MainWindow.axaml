@@ -192,8 +192,8 @@
                                                 </ItemsControl>
                                                 <!-- 按鈕列 -->
                                                 <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,6,0,0">
-                                                    <Button Classes="primary" Content="套用" Command="{Binding ApplyPlanCommand}" />
-                                                    <Button Classes="tool" Content="取消" Command="{Binding CancelPlanCommand}" />
+                                                    <Button Classes="primary" Content="套用" Command="{Binding ApplyPlanCommand}" IsEnabled="{Binding IsActionable}" />
+                                                    <Button Classes="tool" Content="取消" Command="{Binding CancelPlanCommand}" IsEnabled="{Binding IsActionable}" />
                                                 </StackPanel>
                                             </StackPanel>
                                         </Border>
@@ -214,8 +214,7 @@
                                                             <ItemsControl ItemsSource="{Binding Diff.Before}">
                                                                 <ItemsControl.ItemTemplate>
                                                                     <DataTemplate>
-                                                                        <TextBlock FontSize="11" Foreground="{DynamicResource TextBrush}" TextWrapping="Wrap"
-                                                                                   Text="{Binding}" />
+                                                                        <TextBlock FontSize="11" Foreground="{DynamicResource TextBrush}" TextWrapping="Wrap"><Run Text="{Binding Key}" FontWeight="Bold" /><Run Text=": " /><Run Text="{Binding Value}" /></TextBlock>
                                                                     </DataTemplate>
                                                                 </ItemsControl.ItemTemplate>
                                                             </ItemsControl>
@@ -225,8 +224,7 @@
                                                             <ItemsControl ItemsSource="{Binding Diff.After}">
                                                                 <ItemsControl.ItemTemplate>
                                                                     <DataTemplate>
-                                                                        <TextBlock FontSize="11" Foreground="{DynamicResource TextBrush}" TextWrapping="Wrap"
-                                                                                   Text="{Binding}" />
+                                                                        <TextBlock FontSize="11" Foreground="{DynamicResource TextBrush}" TextWrapping="Wrap"><Run Text="{Binding Key}" FontWeight="Bold" /><Run Text=": " /><Run Text="{Binding Value}" /></TextBlock>
                                                                     </DataTemplate>
                                                                 </ItemsControl.ItemTemplate>
                                                             </ItemsControl>
@@ -235,8 +233,8 @@
                                                 </Border>
                                                 <!-- 按鈕列 -->
                                                 <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,6,0,0">
-                                                    <Button Classes="primary" Content="套用修改" Command="{Binding ApplyDiffCommand}" />
-                                                    <Button Classes="tool" Content="取消" Command="{Binding CancelDiffCommand}" />
+                                                    <Button Classes="primary" Content="套用修改" Command="{Binding ApplyDiffCommand}" IsEnabled="{Binding IsActionable}" />
+                                                    <Button Classes="tool" Content="取消" Command="{Binding CancelDiffCommand}" IsEnabled="{Binding IsActionable}" />
                                                 </StackPanel>
                                             </StackPanel>
                                         </Border>

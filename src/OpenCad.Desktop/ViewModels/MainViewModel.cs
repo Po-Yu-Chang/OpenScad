@@ -595,9 +595,21 @@ public class MainViewModel : INotifyPropertyChanged
                 var plan = await _llmProvider.CreatePlanAsync(context);
 
                 // 顯示計畫卡片
-                Messages.Add(ChatMessage.FromPlan(plan,
-                    new RelayCommand(() => _ = ApplyPlanAsync(plan)),
-                    new RelayCommand(() => { })));
+                // 一次性卡片：套用/取消後停用按鈕，防止重複執行
+                var planMsg = ChatMessage.FromPlan(plan);
+                planMsg.ApplyPlanCommand = new RelayCommand(() =>
+                {
+                    if (!planMsg.IsActionable) return;
+                    planMsg.IsActionable = false;
+                    _ = ApplyPlanAsync(plan);
+                });
+                planMsg.CancelPlanCommand = new RelayCommand(() =>
+                {
+                    if (!planMsg.IsActionable) return;
+                    planMsg.IsActionable = false;
+                    Messages.Add(ChatMessage.Assistant("已取消建模計畫。"));
+                });
+                Messages.Add(planMsg);
 
                 // 如果缺少資訊，提示使用者
                 if (plan.MissingInfo.Count > 0)
@@ -708,12 +720,16 @@ public class MainViewModel : INotifyPropertyChanged
             // 取得修改前的特徵資料（用於 diff）
             var beforeParams = ExtractFeatureParams(featureGraphJson, command.TargetFeatureId);
 
-            // 建構修改後的參數預覽
+            // 建構修改後的參數預覽（parameters 與 standard_parts 都要反映）
             var afterParams = new Dictionary<string, object>(beforeParams);
             if (command.Parameters != null)
             {
                 foreach (var kvp in command.Parameters)
                     afterParams[kvp.Key] = kvp.Value;
+            }
+            if (command.StandardParts != null && command.StandardParts.Count > 0)
+            {
+                afterParams["standard_parts"] = JsonSerializer.Serialize(command.StandardParts);
             }
 
             var diff = new ModificationDiff
@@ -725,9 +741,21 @@ public class MainViewModel : INotifyPropertyChanged
             };
 
             // 顯示差異卡片（A2）
-            Messages.Add(ChatMessage.FromDiff(diff,
-                new RelayCommand(() => _ = ApplyDiffAsync(command)),
-                new RelayCommand(() => { })));
+            // 一次性卡片：套用/取消後停用按鈕，防止重複執行
+            var diffMsg = ChatMessage.FromDiff(diff);
+            diffMsg.ApplyDiffCommand = new RelayCommand(() =>
+            {
+                if (!diffMsg.IsActionable) return;
+                diffMsg.IsActionable = false;
+                _ = ApplyDiffAsync(command);
+            });
+            diffMsg.CancelDiffCommand = new RelayCommand(() =>
+            {
+                if (!diffMsg.IsActionable) return;
+                diffMsg.IsActionable = false;
+                Messages.Add(ChatMessage.Assistant("已取消修改。"));
+            });
+            Messages.Add(diffMsg);
         }
         catch (Exception ex)
         {
@@ -1035,6 +1063,14 @@ public class MainViewModel : INotifyPropertyChanged
             var doc = JsonDocument.Parse(featureGraphJson);
             if (doc.RootElement.TryGetProperty("features", out var featuresEl))
             {
+                // 新版 graph 格式 {schema_version, features:[...]}——先解開包裝
+                // （與 UpdateFeatureTreeAsync 相同的相容處理）
+                if (featuresEl.ValueKind == JsonValueKind.Object &&
+                    featuresEl.TryGetProperty("features", out var innerEl))
+                {
+                    featuresEl = innerEl;
+                }
+
                 JsonElement? targetFeat = null;
                 if (featuresEl.ValueKind == JsonValueKind.Array)
                 {
@@ -1057,6 +1093,12 @@ public class MainViewModel : INotifyPropertyChanged
                 {
                     foreach (var p in paramsEl.EnumerateObject())
                         result[p.Name] = FormatJsonValue(p.Value);
+                }
+                // standard_parts 也納入 diff（M3→M5 這類修改改的是標準件）
+                if (targetFeat.HasValue && targetFeat.Value.TryGetProperty("standard_parts", out var spEl) &&
+                    spEl.ValueKind == JsonValueKind.Object && spEl.EnumerateObject().Any())
+                {
+                    result["standard_parts"] = FormatJsonValue(spEl);
                 }
             }
         }

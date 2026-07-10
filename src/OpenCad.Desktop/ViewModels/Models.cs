@@ -19,7 +19,7 @@ public enum MessageKind
 /// <summary>
 /// 對話訊息模型。
 /// </summary>
-public class ChatMessage
+public class ChatMessage : System.ComponentModel.INotifyPropertyChanged
 {
     public string Text { get; set; } = string.Empty;
     public MessageKind Kind { get; set; } = MessageKind.Assistant;
@@ -29,6 +29,25 @@ public class ChatMessage
     public ModificationDiff? Diff { get; set; }
     public ICommand? ApplyDiffCommand { get; set; }
     public ICommand? CancelDiffCommand { get; set; }
+
+    private bool _isActionable = true;
+
+    /// <summary>
+    /// 卡片按鈕是否可操作——套用或取消後設為 false（一次性），
+    /// 防止重複點擊造成命令被執行多次。
+    /// </summary>
+    public bool IsActionable
+    {
+        get => _isActionable;
+        set
+        {
+            _isActionable = value;
+            PropertyChanged?.Invoke(this,
+                new System.ComponentModel.PropertyChangedEventArgs(nameof(IsActionable)));
+        }
+    }
+
+    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
 
     public static ChatMessage User(string text) => new()
     {
