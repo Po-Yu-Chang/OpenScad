@@ -118,7 +118,9 @@ public abstract class LlmProviderBase : ILlmProvider
 
 各特徵參數說明：
 - fillet：radius(mm)、edges(預設 all；可選 all_vertical/all_horizontal/top/bottom)。
-- chamfer：length(mm)、edges(同上)。
+  重要：使用者說「通孔不要動」「孔不要動」「不要影響孔」時，必須在 parameters 中加入 exclude_holes: true，
+  這樣圓角只作用於外邊緣，不會影響內部孔的邊緣。
+- chamfer：length(mm)、edges(同上)；同樣支援 exclude_holes: true。
 - hole：diameter(mm，直徑) 或 standard_parts.fastener.standard(如 M3/M5)+fit(normal_clearance 等)；
   through_all(true/false)、depth(mm，盲孔用)；hole_type(""simple""或""counterbore"")；
   positions 為 [[x,y],...] 座標列表，用於多孔排列（如四個固定孔），中心單孔用 [[0,0]]。
@@ -276,5 +278,8 @@ public abstract class LlmProviderBase : ILlmProvider
         "17. 修改流程中挖圓孔/貫穿孔：一律使用 hole 特徵（diameter + positions），不要用 pocket。\n" +
         "    pocket 需要 references 指向已有的 sketch 特徵作為輪廓，修改流程中無法同時建立 sketch + pocket 兩個特徵。\n" +
         "    hole 的 positions 用 [[x,y],...] 格式，中心孔用 [[0,0]]。diameter 是直徑(mm)，radius 是半徑——注意換算（radius 3mm = diameter 6mm）。\n" +
+        "18. fillet/chamfer 的 exclude_holes 參數：當使用者說「通孔不要動」「孔不要影響」「不要動到中間的孔」時，\n" +
+        "    必須在 fillet/chamfer 的 parameters 中加入 exclude_holes: true。這會讓圓角/倒角只作用於外邊緣，跳過孔的邊緣。\n" +
+        "    若使用者沒有特別說要保護孔，則不需要加 exclude_holes（預設 false）。\n" +
         "重要：你的輸出必須是合法 JSON，符合指定的 Schema。";
 }

@@ -481,7 +481,7 @@ class Build123dAdapter:
                 result = result.fuse(offset_part)
         return result
 
-    def _select_edges(self, part: "Part", selector: str) -> list:
+    def _select_edges(self, part: "Part", selector: str, exclude_holes: bool = False) -> list:
         """根據選擇器字串挑選邊。
 
         支援的選擇器：
@@ -490,27 +490,39 @@ class Build123dAdapter:
         - "all_horizontal": 垂直 Z 軸的邊（X 或 Y 方向）
         - "top": 頂面邊
         - "bottom": 底面邊
+
+        exclude_holes=True 時，排除圓柱面孔的邊（用於「通孔不要動」場景）。
         """
         if selector == "all":
-            return list(part.edges())
+            result = list(part.edges())
         elif selector == "all_vertical":
-            return list(part.edges().filter_by(Axis.Z))
+            result = list(part.edges().filter_by(Axis.Z))
         elif selector == "all_horizontal":
             edges_x = part.edges().filter_by(Axis.X)
             edges_y = part.edges().filter_by(Axis.Y)
-            return list(edges_x) + list(edges_y)
+            result = list(edges_x) + list(edges_y)
         elif selector == "top":
             bb = part.bounding_box()
             top_z = bb.max.Z
-            return [e for e in part.edges()
-                    if all(abs(v.Z - top_z) < 0.01 for v in e.vertices())]
+            result = [e for e in part.edges()
+                      if all(abs(v.Z - top_z) < 0.01 for v in e.vertices())]
         elif selector == "bottom":
             bb = part.bounding_box()
             bot_z = bb.min.Z
-            return [e for e in part.edges()
-                    if all(abs(v.Z - bot_z) < 0.01 for v in e.vertices())]
+            result = [e for e in part.edges()
+                      if all(abs(v.Z - bot_z) < 0.01 for v in e.vertices())]
         else:
-            return list(part.edges())
+            result = list(part.edges())
+
+        # 排除圓柱面孔（hole）的邊——用於「通孔不要動」場景
+        if exclude_holes and result:
+            # 孔的邊是圓形邊（CIRCLE），外邊緣是直線邊（LINE）
+            # 也可以透過 face.geom_type == CYLINDER 來判斷，但 edge.geom_type 更直接
+            from build123d import GeomType
+            filtered = [e for e in result if e.geom_type != GeomType.CIRCLE]
+            result = filtered
+
+        return result
 
     def _build_fillet(
         self, feature: Feature, parts: dict[str, "Part"], graph: FeatureGraph,
@@ -526,8 +538,9 @@ class Build123dAdapter:
 
         radius = self._get_param(feature, "radius", 1.0)
         edge_selector = feature.parameters.get("edges", "all")
+        exclude_holes = feature.parameters.get("exclude_holes", False)
 
-        edges = self._select_edges(base_part, edge_selector)
+        edges = self._select_edges(base_part, edge_selector, exclude_holes)
         if not edges:
             raise ValueError(f"找不到符合條件的邊來導圓角: {edge_selector}")
         result = base_part.fillet(radius, edges)
@@ -547,8 +560,9 @@ class Build123dAdapter:
 
         length = self._get_param(feature, "length", 1.0)
         edge_selector = feature.parameters.get("edges", "all")
+        exclude_holes = feature.parameters.get("exclude_holes", False)
 
-        edges = self._select_edges(base_part, edge_selector)
+        edges = self._select_edges(base_part, edge_selector, exclude_holes)
         if not edges:
             raise ValueError(f"找不到符合條件的邊來倒角: {edge_selector}")
         result = base_part.chamfer(length, None, edges)
