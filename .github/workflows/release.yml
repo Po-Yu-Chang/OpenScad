@@ -1,0 +1,50 @@
+# OpenCad 三平台一鍵安裝包 Release 管線（骨架）
+# 觸發：推送 v* tag（如 v0.1.0）或手動觸發。
+# 目前專案處於 Phase 0，各建置步驟為佔位；程式碼進場後逐步替換為真實命令。
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            rid: win-x64
+            installer: inno-setup   # 產出 .exe 安裝精靈
+          - os: macos-latest
+            rid: osx-arm64
+            installer: dmg          # 產出 .dmg（正式版需 codesign + notarization）
+          - os: ubuntu-latest
+            rid: linux-x64
+            installer: appimage     # 產出 .AppImage
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Publish self-contained app (placeholder)
+        run: echo "dotnet publish src/OpenCad.Desktop -r ${{ matrix.rid }} --self-contained -c Release"
+
+      - name: Bundle Python CAD Worker (placeholder)
+        run: echo "conda-pack cad-worker env for ${{ matrix.rid }}"
+
+      - name: Build installer (placeholder)
+        run: echo "build ${{ matrix.installer }} package for ${{ matrix.rid }}"
+
+      # - name: Upload to GitHub Releases
+      #   uses: softprops/action-gh-release@v2
+      #   with:
+      #     files: |
+      #       dist/*.exe
+      #       dist/*.dmg
+      #       dist/*.AppImage
+      #       dist/SHA256SUMS.txt

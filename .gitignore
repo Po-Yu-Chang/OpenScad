@@ -1,0 +1,25 @@
+# .NET
+bin/
+obj/
+*.user
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Build / packaging outputs
+dist/
+publish/
+*.AppImage
+*.dmg
+
+# IDE
+.vs/
+.idea/
+*.suo
+
+# OS
+Thumbs.db
+.DS_Store
