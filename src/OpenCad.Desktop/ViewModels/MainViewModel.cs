@@ -41,7 +41,13 @@ public class MainViewModel : INotifyPropertyChanged
     public string InputText
     {
         get => _inputText;
-        set { _inputText = value; OnPropertyChanged(); }
+        set
+        {
+            _inputText = value;
+            OnPropertyChanged();
+            // SendCommand 的 CanExecute 依賴此屬性——必須通知按鈕重新查詢
+            ((AsyncRelayCommand)SendCommand).RaiseCanExecuteChanged();
+        }
     }
 
     public string LlmStatus
@@ -263,9 +269,6 @@ public class MainViewModel : INotifyPropertyChanged
             var features = data.RootElement.GetProperty("features");
             foreach (var feat in features.EnumerateArray())
             {
-                var featDict = JsonSerializer.Deserialize<Dictionary<string, object>>(feat.GetRawText(),
-                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new();
-
                 var feature = JsonSerializer.Deserialize<Feature>(feat.GetRawText(),
                     new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
                 if (feature == null) continue;
@@ -431,34 +434,58 @@ public class MainViewModel : INotifyPropertyChanged
         try
         {
             IsBusy = true;
+
+            // 逐步驟確定性地建立特徵——LLM 只產生計畫，特徵由計畫直接映射，
+            // 並自動串接 input（pad/revolve 接最近的 sketch，其餘接前一個特徵）
+            string? lastSketchId = null;
+            string? lastFeatureId = null;
+            var index = 0;
+
             foreach (var step in plan.Steps)
             {
-                if (!Enum.TryParse<FeatureType>(step.FeatureType, true, out var featType))
+                index++;
+                // 計畫的 feature_type 是 snake_case（如 linear_pattern）
+                var enumName = step.FeatureType.Replace("_", "");
+                if (!Enum.TryParse<FeatureType>(enumName, true, out var featType))
                 {
                     Messages.Add(ChatMessage.Error($"未知特徵類型：{step.FeatureType}"));
                     continue;
                 }
+
+                var featureId = $"{step.FeatureType}_{index}";
+                var input = featType switch
+                {
+                    FeatureType.Sketch => null,
+                    FeatureType.Pad or FeatureType.Revolve => lastSketchId,
+                    _ => lastFeatureId,
+                };
 
                 var command = new CadCommand
                 {
                     Action = "create_feature",
                     Feature = new Feature
                     {
-                        FeatureId = $"feat_{Guid.NewGuid():N}".Substring(0, 12),
+                        FeatureId = featureId,
                         Type = featType,
                         Name = step.Description,
+                        Input = input,
+                        References = input != null ? new List<string> { input } : new(),
                         Parameters = step.Parameters,
                     },
                 };
 
-                var cmd = await _llmProvider!.CreateCommandAsync(plan);
-                var result = await _worker.ApplyCommandAsync(_projectId, cmd);
+                var result = await _worker.ApplyCommandAsync(_projectId, command);
                 if (result.Status == "error")
                 {
                     Messages.Add(ChatMessage.Error(
-                        $"命令失敗：{result.ErrorCode} — {result.EngineMessage}"));
+                        $"特徵 {featureId} 建立失敗：{result.ErrorCode} — {result.EngineMessage}"));
                     return;
                 }
+
+                if (featType == FeatureType.Sketch)
+                    lastSketchId = featureId;
+                else
+                    lastFeatureId = featureId;
             }
 
             Messages.Add(ChatMessage.Assistant("計畫已套用，開始重建…"));
@@ -512,24 +539,47 @@ public class MainViewModel : INotifyPropertyChanged
             var name = featEl.TryGetProperty("name", out var nEl) ? nEl.GetString() ?? fid : fid;
             var type = featEl.TryGetProperty("type", out var tEl) ? tEl.GetString() ?? "" : "";
 
-            return new FeatureNode
+            var node = new FeatureNode
             {
                 FeatureId = fid,
                 DisplayName = $"{name} ({type})",
                 FeatureType = type,
             };
+
+            // 抽出實際參數供參數面板顯示
+            node.Parameters.Add(new ParameterItem { Key = "feature_id", Value = fid });
+            node.Parameters.Add(new ParameterItem { Key = "type", Value = type });
+            if (featEl.TryGetProperty("input", out var inEl) && inEl.ValueKind == JsonValueKind.String)
+                node.Parameters.Add(new ParameterItem { Key = "input", Value = inEl.GetString() ?? "" });
+            if (featEl.TryGetProperty("parameters", out var paramsEl) && paramsEl.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var p in paramsEl.EnumerateObject())
+                    node.Parameters.Add(new ParameterItem { Key = p.Name, Value = FormatJsonValue(p.Value) });
+            }
+            if (featEl.TryGetProperty("standard_parts", out var spEl) &&
+                spEl.ValueKind == JsonValueKind.Object && spEl.EnumerateObject().Any())
+                node.Parameters.Add(new ParameterItem { Key = "standard_parts", Value = FormatJsonValue(spEl) });
+
+            return node;
         }
         catch { return null; }
     }
+
+    private static string FormatJsonValue(JsonElement el) => el.ValueKind switch
+    {
+        JsonValueKind.String => el.GetString() ?? "",
+        JsonValueKind.Number => el.GetRawText(),
+        JsonValueKind.True or JsonValueKind.False => el.GetRawText(),
+        _ => el.GetRawText(),
+    };
 
     private void UpdateParameterPanel()
     {
         SelectedFeatureParameters.Clear();
         if (_selectedFeature == null) return;
 
-        // 從 Worker 取得特徵參數（這裡先從特徵樹節點的基本資訊顯示）
-        SelectedFeatureParameters.Add(new ParameterItem { Key = "feature_id", Value = _selectedFeature.FeatureId });
-        SelectedFeatureParameters.Add(new ParameterItem { Key = "type", Value = _selectedFeature.FeatureType });
+        foreach (var p in _selectedFeature.Parameters)
+            SelectedFeatureParameters.Add(p);
 
         // 高亮對應 mesh
         ViewerScriptRequested?.Invoke($"highlightByName('{_selectedFeature.FeatureId}');");

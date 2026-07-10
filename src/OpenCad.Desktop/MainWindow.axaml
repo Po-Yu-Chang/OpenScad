@@ -130,7 +130,7 @@
                         Background="{DynamicResource OverlayBgBrush}" CornerRadius="12" Padding="4"
                         MinWidth="400" MaxWidth="600">
                     <Grid ColumnDefinitions="*,Auto">
-                        <TextBox Grid.Column="0" Text="{Binding InputText}" Watermark="描述設計需求…"
+                        <TextBox x:Name="PART_PromptInput" Grid.Column="0" Text="{Binding InputText}" Watermark="描述設計需求…"
                                  Background="Transparent" BorderThickness="0"
                                  Foreground="{DynamicResource TextBrush}"
                                  AcceptsReturn="True" MinHeight="36"

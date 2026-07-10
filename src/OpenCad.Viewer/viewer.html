@@ -217,6 +217,28 @@
             controls.update();
         };
 
+        // 依 mesh 名稱高亮（供特徵樹選取連動）。
+        // 目前 GLB 匯出為單一合併網格，名稱多半不匹配——找不到時靜默略過；
+        // Phase 2 逐特徵匯出 mesh 後此函式即可生效。
+        window.highlightByName = function(name) {
+            window.clearHighlight();
+            if (!currentModel || !name) return;
+            let target = null;
+            currentModel.traverse((child) => {
+                if (!target && child.isMesh && child.name === name) target = child;
+            });
+            if (!target) return;
+            highlightedMesh = target;
+            originalMaterial = target.material.clone();
+            target.material = new THREE.MeshStandardMaterial({
+                color: 0xf9e2af,
+                metalness: 0.3,
+                roughness: 0.4,
+            });
+            document.getElementById('highlight-indicator').textContent = `已選取: ${name}`;
+            document.getElementById('highlight-indicator').style.display = 'block';
+        };
+
         window.clearHighlight = function() {
             if (highlightedMesh && originalMaterial) {
                 highlightedMesh.material = originalMaterial;

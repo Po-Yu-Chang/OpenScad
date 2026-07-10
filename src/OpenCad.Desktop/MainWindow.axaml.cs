@@ -65,15 +65,15 @@ public partial class MainWindow : Window
         _messagePollTimer.Tick += OnMessagePoll;
         _messagePollTimer.Start();
 
-        // 鍵盤綁定：Enter 送出、Shift+Enter 換行
-        AddHandler(KeyDownEvent, OnKeyDown, Avalonia.Interactivity.RoutingStrategies.Tunnel);
+        // 鍵盤綁定：Enter 送出、Shift+Enter 換行——只在提示輸入框內生效
+        var promptInput = this.FindControl<TextBox>("PART_PromptInput");
+        promptInput?.AddHandler(KeyDownEvent, OnPromptKeyDown, Avalonia.Interactivity.RoutingStrategies.Tunnel);
     }
 
-    private void OnKeyDown(object? sender, KeyEventArgs e)
+    private void OnPromptKeyDown(object? sender, KeyEventArgs e)
     {
         if (e.Key == Key.Enter && e.KeyModifiers != KeyModifiers.Shift)
         {
-            // 在提示輸入框中按 Enter 送出
             if (DataContext is ViewModels.MainViewModel vm &&
                 !string.IsNullOrWhiteSpace(vm.InputText))
             {

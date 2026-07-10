@@ -62,6 +62,7 @@ public class FeatureNode
     public string FeatureId { get; set; } = string.Empty;
     public string DisplayName { get; set; } = string.Empty;
     public string FeatureType { get; set; } = string.Empty;
+    public List<ParameterItem> Parameters { get; set; } = new();
     public ObservableCollection<FeatureNode> Children { get; set; } = new();
 }
 
