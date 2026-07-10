@@ -30,25 +30,23 @@ public class App : Avalonia.Application
         AvaloniaWebViewBuilder.Initialize(default);
     }
 
-    public override async void OnFrameworkInitializationCompleted()
+    public override void OnFrameworkInitializationCompleted()
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
-            // 啟動 CAD Worker 子程序
-            await InitializeWorkerAsync();
-
-            var window = new MainWindow
-            {
-                DataContext = new ViewModels.MainViewModel(_cadWorker, _cadWorker as CadWorkerClient),
-            };
-            desktop.MainWindow = window;
-
+            // 視窗必須在啟動流程中同步建立——Avalonia 只在啟動當下顯示
+            // desktop.MainWindow，事後才指定的視窗不會被顯示。
+            var vm = new ViewModels.MainViewModel();
+            desktop.MainWindow = new MainWindow { DataContext = vm };
             desktop.ShutdownRequested += OnShutdownRequested;
+
+            // Worker 啟動需時約 10 秒——在背景進行，完成後掛載到 ViewModel
+            _ = InitializeWorkerAsync(vm);
         }
         base.OnFrameworkInitializationCompleted();
     }
 
-    private async Task InitializeWorkerAsync()
+    private async Task InitializeWorkerAsync(ViewModels.MainViewModel vm)
     {
         try
         {
@@ -56,6 +54,7 @@ public class App : Avalonia.Application
             if (workerDir == null)
             {
                 Log.Warning("找不到 cad-worker 目錄——Worker 功能將停用");
+                await Dispatcher.UIThread.InvokeAsync(() => vm.AttachWorker(null, null));
                 return;
             }
 
@@ -66,16 +65,19 @@ public class App : Avalonia.Application
                 Log.Warning("CAD Worker 啟動失敗——Worker 功能將停用");
                 _workerProcess?.Dispose();
                 _workerProcess = null;
+                await Dispatcher.UIThread.InvokeAsync(() => vm.AttachWorker(null, null));
                 return;
             }
 
             var client = new CadWorkerClient("http://127.0.0.1:8765", _workerProcess.SessionToken);
             _cadWorker = client;
             Log.Information("CAD Worker 已連線");
+            await Dispatcher.UIThread.InvokeAsync(() => vm.AttachWorker(client, client));
         }
         catch (Exception ex)
         {
             Log.Error(ex, "初始化 CAD Worker 失敗");
+            await Dispatcher.UIThread.InvokeAsync(() => vm.AttachWorker(null, null));
         }
     }
 

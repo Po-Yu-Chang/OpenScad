@@ -17,8 +17,8 @@ namespace OpenCad.Desktop.ViewModels;
 /// </summary>
 public class MainViewModel : INotifyPropertyChanged
 {
-    private readonly ICadWorker? _worker;
-    private readonly CadWorkerClient? _workerClient;
+    private ICadWorker? _worker;
+    private CadWorkerClient? _workerClient;
     private OllamaLlmProvider? _llmProvider;
 
     private string _inputText = string.Empty;
@@ -164,6 +164,17 @@ public class MainViewModel : INotifyPropertyChanged
     {
         await DetectWorkerAsync();
         await DetectLlmAsync();
+    }
+
+    /// <summary>
+    /// Worker 於背景啟動完成後掛載（視窗先顯示、Worker 後就緒）。
+    /// 必須在 UI 執行緒呼叫。
+    /// </summary>
+    public void AttachWorker(ICadWorker? worker, CadWorkerClient? workerClient)
+    {
+        _worker = worker;
+        _workerClient = workerClient;
+        _ = DetectWorkerAsync();
     }
 
     private async Task DetectWorkerAsync()
