@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Specialized;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
@@ -72,20 +73,76 @@ public partial class MainWindow : Window
         _messagePollTimer.Start();
 
         // 鍵盤綁定：Enter 送出、Shift+Enter 換行——只在提示輸入框內生效
+        // 先 -= 再 +=：Loaded 若重入不會重複掛載（重複掛載會造成一次 Enter 送出兩次）
         var promptInput = this.FindControl<TextBox>("PART_PromptInput");
-        promptInput?.AddHandler(KeyDownEvent, OnPromptKeyDown, Avalonia.Interactivity.RoutingStrategies.Tunnel);
+        if (promptInput != null)
+        {
+            _promptInput = promptInput;
+            promptInput.KeyDown -= OnPromptKeyDown;
+            promptInput.KeyDown += OnPromptKeyDown;
+        }
+    }
+
+    private TextBox? _promptInput;
+    private Avalonia.Controls.Presenters.TextPresenter? _promptPresenter;
+    private bool _presenterHooked;
+    private DateTime _lastImeCommitUtc = DateTime.MinValue;
+    private string _lastPreedit = string.Empty;
+
+    /// <summary>
+    /// 取得輸入框的 TextPresenter 並訂閱 PreeditText 變化——
+    /// 中文輸入法（注音/拼音）組字中 PreeditText 非空；
+    /// 由非空→空的瞬間即「選字完成（commit）」，該次 Enter 不得觸發送出。
+    /// </summary>
+    private Avalonia.Controls.Presenters.TextPresenter? GetPromptPresenter()
+    {
+        if (_promptPresenter == null && _promptInput != null)
+        {
+            _promptPresenter = Avalonia.VisualTree.VisualExtensions
+                .GetVisualDescendants(_promptInput)
+                .OfType<Avalonia.Controls.Presenters.TextPresenter>()
+                .FirstOrDefault();
+
+            if (_promptPresenter != null && !_presenterHooked)
+            {
+                _presenterHooked = true;
+                _promptPresenter.PropertyChanged += (_, args) =>
+                {
+                    if (args.Property.Name != nameof(Avalonia.Controls.Presenters.TextPresenter.PreeditText))
+                        return;
+                    var newVal = args.NewValue as string ?? string.Empty;
+                    // 非空 → 空 ＝ 組字剛提交
+                    if (!string.IsNullOrEmpty(_lastPreedit) && string.IsNullOrEmpty(newVal))
+                        _lastImeCommitUtc = DateTime.UtcNow;
+                    _lastPreedit = newVal;
+                };
+            }
+        }
+        return _promptPresenter;
     }
 
     private void OnPromptKeyDown(object? sender, KeyEventArgs e)
     {
-        if (e.Key == Key.Enter && e.KeyModifiers != KeyModifiers.Shift)
+        if (e.Key != Key.Enter || e.KeyModifiers != KeyModifiers.None)
+            return;
+
+        // IME 防護 1：組字中（候選字未確認）——Enter 是選字，不是送出
+        var presenter = GetPromptPresenter();
+        if (!string.IsNullOrEmpty(presenter?.PreeditText))
+            return;
+
+        // IME 防護 2：剛完成選字的同一顆 Enter（commit 後 KeyDown 才到達）——不送出
+        if ((DateTime.UtcNow - _lastImeCommitUtc).TotalMilliseconds < 150)
         {
-            if (DataContext is ViewModels.MainViewModel vm &&
-                !string.IsNullOrWhiteSpace(vm.InputText))
-            {
-                vm.SendCommand.Execute(null);
-                e.Handled = true;
-            }
+            e.Handled = true;   // 也不要讓 TextBox 插入換行
+            return;
+        }
+
+        if (DataContext is ViewModels.MainViewModel vm &&
+            !string.IsNullOrWhiteSpace(vm.InputText))
+        {
+            e.Handled = true;
+            vm.SendCommand.Execute(null);
         }
     }
 
@@ -138,6 +195,10 @@ public partial class MainWindow : Window
                             break;
                         case ViewerBridge.MessageType.SketchCancelled:
                             vm.CancelSketch();
+                            break;
+                        case ViewerBridge.MessageType.DatumPlaneClicked:
+                            if (msg.DatumPlaneName != null)
+                                vm.SelectDatumPlane(msg.DatumPlaneName);
                             break;
                     }
                 }

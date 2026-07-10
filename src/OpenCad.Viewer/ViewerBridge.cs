@@ -19,6 +19,7 @@ public class ViewerBridge
         Error,
         SketchCommitted,
         SketchCancelled,
+        DatumPlaneClicked,
     }
 
     public record ViewerMessage(
@@ -26,7 +27,8 @@ public class ViewerBridge
         string? ObjectId = null,
         string? ErrorMessage = null,
         string? FeatureId = null,
-        string? EntitiesJson = null);
+        string? EntitiesJson = null,
+        string? DatumPlaneName = null);
 
     /// <summary>
     /// 解析來自 WebView 的訊息。
@@ -45,6 +47,7 @@ public class ViewerBridge
                 "error" => MessageType.Error,
                 "sketch_committed" => MessageType.SketchCommitted,
                 "sketch_cancelled" => MessageType.SketchCancelled,
+                "datum_plane_clicked" => MessageType.DatumPlaneClicked,
                 _ => (MessageType?)null,
             };
 
@@ -66,7 +69,11 @@ public class ViewerBridge
                 ? element.TryGetProperty("entities", out var ents) ? ents.GetRawText() : null
                 : null;
 
-            return new ViewerMessage(type.Value, objectId, errorMsg, featureId, entitiesJson);
+            string? datumPlaneName = type == MessageType.DatumPlaneClicked
+                ? element.TryGetProperty("name", out var dname) ? dname.GetString() : null
+                : null;
+
+            return new ViewerMessage(type.Value, objectId, errorMsg, featureId, entitiesJson, datumPlaneName);
         }
         catch
         {
@@ -95,8 +102,10 @@ public class ViewerBridge
     /// <summary>
     /// 建構進入草圖模式的 JavaScript 呼叫字串。
     /// </summary>
-    public static string BuildEnterSketchScript(string featureId, string entitiesJson) =>
-        $"enterSketchMode('{featureId}', {entitiesJson});";
+    public static string BuildEnterSketchScript(string featureId, string entitiesJson, string? planeJson = null) =>
+        planeJson != null
+            ? $"enterSketchMode('{featureId}', {entitiesJson}, {planeJson});"
+            : $"enterSketchMode('{featureId}', {entitiesJson});";
 
     /// <summary>
     /// 建構離開草圖模式的 JavaScript 呼叫字串。

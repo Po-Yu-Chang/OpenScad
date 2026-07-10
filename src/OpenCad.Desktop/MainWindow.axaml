@@ -22,7 +22,7 @@
 
         <!-- ═══ 工具列 ═══ -->
         <Border Grid.Row="0" Background="{DynamicResource MantleBrush}" Padding="8,4">
-            <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,*,Auto,Auto,Auto,Auto">
+            <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,*,Auto,Auto,Auto,Auto,Auto">
                 <!-- 檔案選單 -->
                 <Menu Grid.Column="0" Background="Transparent">
                     <MenuItem Header="檔案" Foreground="{DynamicResource TextBrush}">
@@ -60,8 +60,11 @@
                 <Button Grid.Column="8" Classes="tool" Content="匯出 STEP" Command="{Binding ExportCommand}" CommandParameter="step" Margin="0,0,8,0" />
                 <Button Grid.Column="9" Classes="tool" Content="匯出 STL" Command="{Binding ExportCommand}" CommandParameter="stl" Margin="0,0,8,0" />
 
+                <!-- 匯出對話紀錄（供分析 LLM 意圖判斷） -->
+                <Button Grid.Column="10" Classes="tool" Content="💬 匯出對話" Command="{Binding ExportChatCommand}" Margin="0,0,8,0" ToolTip.Tip="將聊天紀錄匯出為 Markdown，方便分析 LLM 意圖判斷效果" />
+
                 <!-- 收合右欄 -->
-                <Button Grid.Column="10" Classes="tool" Content="⚙" Command="{Binding ToggleRightPanelCommand}" ToolTip.Tip="開啟／收合對話窗格（輸入框在此欄）" />
+                <Button Grid.Column="11" Classes="tool" Content="⚙" Command="{Binding ToggleRightPanelCommand}" ToolTip.Tip="開啟／收合對話窗格（輸入框在此欄）" />
             </Grid>
         </Border>
 
@@ -79,6 +82,7 @@
                                   Background="Transparent">
                             <TreeView.ContextMenu>
                                 <ContextMenu>
+                                    <MenuItem Header="✏ 新增草圖" Command="{Binding NewSketchCommand}" />
                                     <MenuItem Header="✏ 編輯草圖" Command="{Binding EditSketchCommand}" IsVisible="{Binding CanEditSketch}" />
                                     <MenuItem Header="📝 編輯參數" Command="{Binding EditParametersCommand}" />
                                     <MenuItem Header="🗑 刪除" Command="{Binding DeleteFeatureCommand}" />
@@ -274,6 +278,8 @@
                            IsVisible="{Binding !IsWorkerConnected}" />
                 <TextBlock Foreground="{DynamicResource SubtextBrush}" Text="{Binding LlmStatus}" FontFamily="Consolas" FontSize="11" />
                 <TextBlock Foreground="{DynamicResource SubtextBrush}" Text="{Binding ModelInfoText}" FontFamily="Consolas" FontSize="11" />
+                <TextBlock Foreground="{DynamicResource SubtextBrush}" Text="{Binding MassInfoText}" FontFamily="Consolas" FontSize="11"
+                           IsVisible="{Binding MassInfoText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                 <TextBlock Text="⏳ 重建中…" Foreground="{DynamicResource WarningBrush}" FontFamily="Consolas" FontSize="11"
                            IsVisible="{Binding IsBusy}" />
             </StackPanel>

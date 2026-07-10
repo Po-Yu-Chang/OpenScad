@@ -16,6 +16,7 @@ public static class ErrorCodes
     public const string MultipleSolids = "MULTIPLE_SOLIDS";
     public const string InvalidBrep = "INVALID_BREP";
     public const string InvalidStandardPart = "INVALID_STANDARD_PART";
+    public const string SketchNotClosed = "SKETCH_NOT_CLOSED";
     public const string TransportError = "TRANSPORT_ERROR";
 }
 
@@ -44,6 +45,7 @@ public class StructuredError
         ErrorCodes.MultipleSolids => "check_boolean_operations",
         ErrorCodes.InvalidBrep => "check_geometry_integrity",
         ErrorCodes.InvalidStandardPart => "verify_standard_exists_in_lookup_table",
+        ErrorCodes.SketchNotClosed => "ensure_profile_is_closed",
         ErrorCodes.TransportError => "check_worker_process_and_connection",
         _ => "review_error_details",
     };

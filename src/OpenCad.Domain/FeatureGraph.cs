@@ -37,6 +37,9 @@ public class Feature
     [JsonPropertyName("standard_parts")]
     public Dictionary<string, object> StandardParts { get; set; } = new();
 
+    [JsonPropertyName("plane")]
+    public Dictionary<string, object> Plane { get; set; } = new() { ["base"] = "XY", ["offset"] = 0 };
+
     [JsonPropertyName("validation")]
     public ValidationSpec? Validation { get; set; }
 

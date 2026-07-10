@@ -19,7 +19,7 @@ public abstract class LlmProviderBase : ILlmProvider
     /// <summary>
     /// 送出提示詞並取得符合 schema 的 JSON 字串。由各提供者實作傳輸細節。
     /// </summary>
-    protected abstract Task<string> SendStructuredAsync(string prompt, string schema);
+    protected abstract Task<string> SendStructuredAsync(string prompt, string schema, List<ChatTurn>? history = null);
 
     public async Task<DesignPlan> CreatePlanAsync(DesignContext context)
     {
@@ -27,6 +27,13 @@ public abstract class LlmProviderBase : ILlmProvider
 使用者需求：{context.UserRequest}
 
 請將此需求拆解成建模步驟。每個步驟描述要建立的特徵類型和參數。
+拆解規則：
+- 每個 pad/revolve 之前必須有一個 sketch 步驟提供輪廓（sketch_entities 放在 sketch 步驟，不要放在 pad 上）。
+- 平面尺寸（長×寬）由 sketch 的 rectangle width/height 表達；pad.parameters 只放拉伸距離，參數名固定為 length（mm）。
+  例如 10×8×5 長方體 = sketch(rectangle width 10, height 8) + pad(length 5)。
+- 草圖座標以基準面原點為中心：rectangle 以 center_x/center_y 定位（置中於原點時可省略），circle 用 center_x/center_y。
+  例如 10×8 置中底板＋中心貫穿孔：rectangle 不需座標、circle 的 center_x/center_y 都是 0。
+- 挖除（pocket）同樣需要前置 sketch 步驟提供輪廓；pocket.parameters 用 through_all: true（貫穿）或 depth（盲孔深度 mm），兩者擇一必填。
 如果需求中有缺少或矛盾的條件，請在 missing_info 中列出。
 回傳 JSON 格式的設計計畫。";
 
@@ -37,8 +44,11 @@ public abstract class LlmProviderBase : ILlmProvider
     ""steps"": { ""type"": ""array"", ""items"": { ""type"": ""object"",
       ""properties"": {
         ""description"": { ""type"": ""string"" },
-        ""feature_type"": { ""type"": ""string"", ""enum"": [""sketch"",""pad"",""pocket"",""hole"",""linear_pattern"",""circular_pattern"",""mirror"",""fillet"",""chamfer"",""shell"",""revolve"",""boolean_union"",""boolean_difference"",""boolean_intersection""] },
-        ""parameters"": { ""type"": ""object"" }
+        ""feature_type"": { ""type"": ""string"", ""enum"": [""sketch"",""pad"",""pocket"",""hole"",""linear_pattern"",""circular_pattern"",""mirror"",""fillet"",""chamfer"",""shell"",""revolve"",""sweep"",""loft"",""boolean_union"",""boolean_difference"",""boolean_intersection""] },
+        ""parameters"": { ""type"": ""object"" },
+        ""sketch_entities"": { ""type"": ""array"", ""items"": { ""type"": ""object"" } },
+        ""standard_parts"": { ""type"": ""object"" },
+        ""plane"": { ""type"": ""object"", ""properties"": { ""base"": { ""type"": ""string"", ""enum"": [""XY"",""XZ"",""YZ""] }, ""offset"": { ""type"": ""number"" } }, ""required"": [""base""] }
       }, ""required"": [""description"",""feature_type"",""parameters""] } },
     ""summary"": { ""type"": ""string"" },
     ""warnings"": { ""type"": ""array"", ""items"": { ""type"": ""string"" } },
@@ -47,7 +57,7 @@ public abstract class LlmProviderBase : ILlmProvider
   ""required"": [""steps"",""summary""]
 }";
 
-        var result = await SendStructuredAsync(userPrompt, planSchema);
+        var result = await SendStructuredAsync(userPrompt, planSchema, context.History);
         return JsonSerializer.Deserialize<DesignPlan>(result, JsonOpts) ?? new DesignPlan();
     }
 
@@ -83,7 +93,7 @@ public abstract class LlmProviderBase : ILlmProvider
         return JsonSerializer.Deserialize<CadCommand>(result, JsonOpts) ?? new CadCommand();
     }
 
-    public async Task<CadCommand> CreateUpdateCommandAsync(string userRequest, string featureGraphJson)
+    public async Task<CadCommand> CreateUpdateCommandAsync(string userRequest, string featureGraphJson, List<ChatTurn>? history = null)
     {
         var userPrompt = $@"
 使用者的修改需求：{userRequest}
@@ -91,29 +101,63 @@ public abstract class LlmProviderBase : ILlmProvider
 目前 Feature Graph（JSON）：
 {featureGraphJson}
 
-請根據使用者需求，找出要修改的目標特徵（target_feature_id），並產生 update_feature 命令。
+請根據使用者需求，決定命令類型並產生對應命令：
+- 修改既有特徵的參數 → action=update_feature，指定 target_feature_id。
+- 新增特徵（圓角 fillet、倒角 chamfer、挖孔 hole/pocket、薄殼 shell、鏡射 mirror、迴轉 revolve、掃掠 sweep、放樣 loft 等）→ action=create_feature，
+  在 feature 中給定：feature_id（新的唯一 ID，如 fillet_1）、type、input（要加工的實體特徵 ID，如最後一個 pad）、parameters。
+- 刪除既有特徵 → action=delete_feature，指定 target_feature_id。
+  如果使用者說「刪掉最後的圓角」「取消倒角」「把 pocket_1 刪掉」等，用 delete_feature 而非 update_feature。
+- 變更材質 → action=set_material，parameters 中指定 material（如 pla/abs/aluminum/steel/stainless_steel/brass/copper）。
+- 重建模型 → action=rebuild。
+
+各特徵參數說明：
+- fillet：radius(mm)、edges(預設 all；可選 all_vertical/all_horizontal/top/bottom)。
+- chamfer：length(mm)、edges(同上)。
+- hole：diameter(mm) 或 standard_parts.fastener.standard(如 M3/M5)+fit(normal_clearance 等)；
+  through_all(true/false)、depth(mm，盲孔用)；hole_type(""simple""或""counterbore"")；
+  positions 為 [[x,y],...] 座標列表，用於多孔排列（如四個固定孔）。
+  重要：孔的陣列/排列一律使用 hole 的 positions 參數列表，不要使用 linear_pattern 或 circular_pattern（Pattern 僅支援實體特徵，不支援切除）。
+- pocket：through_all(true) 或 depth(mm)；需要前置 sketch 或直接用 positions+diameter。
+- shell：thickness(mm)。
+- mirror：input=要鏡射的實體特徵 ID；目前固定對 XZ 平面鏡射。
+- revolve：angle(度，預設 360)；需要前置 sketch 步驟。
+- sweep：input=輪廓草圖，references=[路徑草圖]。
+- loft：input=第一個輪廓，references=[第二個、第三個…]。
+
 規則：
 1. 只修改使用者明確指定的特徵，其他特徵一律列入 preserve。
 2. 標準件（如螺絲孔徑）只選擇標準與等級（如 M5＋normal_clearance），不要給數值。
-3. 修改 parameters 或 standard_parts 來表達變更。
-4. target_feature_id 必須是上述 Feature Graph 中已存在的 feature_id。";
+3. update_feature 只能修改該特徵型別本身既有的參數——嚴禁發明不存在的參數
+   （例如在 pad 上加 fillet_radius 無效；圓角必須用 create_feature 新增 fillet 特徵）。
+4. target_feature_id／input 必須是上述 Feature Graph 中已存在的 feature_id。
+5. 如果使用者需求涉及目前不支援的功能（如 rib 加強肋、draft 拔模角），在 reasoning 中說明不支援，action 設為 rebuild（不變更模型）。";
 
         var commandSchema = @"
 {
   ""type"": ""object"",
   ""properties"": {
     ""schema_version"": { ""type"": ""string"", ""const"": ""1.0"" },
-    ""action"": { ""type"": ""string"", ""const"": ""update_feature"" },
-    ""target_feature_id"": { ""type"": ""string"", ""description"": ""要修改的特徵 ID，必須存在於 Feature Graph"" },
-    ""parameters"": { ""type"": ""object"", ""description"": ""要更新的參數鍵值"" },
+    ""action"": { ""type"": ""string"", ""enum"": [""update_feature"",""create_feature"",""delete_feature"",""set_material"",""rebuild""], ""description"": ""修改既有特徵用 update_feature；新增特徵用 create_feature；刪除特徵用 delete_feature；變更材質用 set_material；重建用 rebuild"" },
+    ""target_feature_id"": { ""type"": ""string"", ""description"": ""update_feature/delete_feature 必填：要修改或刪除的特徵 ID，必須存在於 Feature Graph"" },
+    ""feature"": { ""type"": ""object"", ""description"": ""create_feature 必填：新特徵定義"",
+      ""properties"": {
+        ""feature_id"": { ""type"": ""string"", ""description"": ""新的唯一 ID，如 fillet_1"" },
+        ""type"": { ""type"": ""string"", ""enum"": [""fillet"",""chamfer"",""hole"",""pocket"",""shell"",""mirror"",""revolve"",""sweep"",""loft"",""sketch"",""pad""] },
+        ""name"": { ""type"": ""string"" },
+        ""input"": { ""type"": ""string"", ""description"": ""要加工的實體特徵 ID"" },
+        ""references"": { ""type"": ""array"", ""items"": { ""type"": ""string"" }, ""description"": ""sweep/loft 的參考草圖 ID 列表"" },
+        ""parameters"": { ""type"": ""object"" }
+      },
+      ""required"": [""feature_id"",""type"",""input"",""parameters""] },
+    ""parameters"": { ""type"": ""object"", ""description"": ""update_feature/set_material 用：要更新的參數鍵值"" },
     ""standard_parts"": { ""type"": ""object"", ""description"": ""要更新的標準件，如 {fastener: {standard: M5, fit: normal_clearance}}"" },
     ""preserve"": { ""type"": ""array"", ""items"": { ""type"": ""string"" }, ""description"": ""不得變動的特徵 ID 列表"" },
     ""reasoning"": { ""type"": ""string"" }
   },
-  ""required"": [""schema_version"",""action"",""target_feature_id""]
+  ""required"": [""schema_version"",""action""]
 }";
 
-        var result = await SendStructuredAsync(userPrompt, commandSchema);
+        var result = await SendStructuredAsync(userPrompt, commandSchema, history);
         return JsonSerializer.Deserialize<CadCommand>(result, JsonOpts) ?? new CadCommand();
     }
 
@@ -147,6 +191,52 @@ public abstract class LlmProviderBase : ILlmProvider
         return JsonSerializer.Deserialize<ReviewResult>(result, JsonOpts) ?? new ReviewResult();
     }
 
+    public async Task<CadCommand> RepairCommandAsync(string errorCode, string engineMessage, string featureGraphJson)
+    {
+        var errorDescriptions = new Dictionary<string, string>
+        {
+            ["SKETCH_NOT_CLOSED"] = "草圖未閉合——pad/pocket 需要至少一個閉合輪廓（rectangle/circle/polygon/slot/closed polyline）。請改為閉合草圖或加入閉合輪廓。",
+            ["INVALID_STANDARD_PART"] = "標準件查表失敗——請確認 standard_parts 中的 standard 欄位為有效值（如 M3/M4/M5）。",
+            ["CIRCULAR_DEPENDENCY"] = "特徵圖存在循環依賴——請移除相互引用的 input/references。",
+            ["GEOMETRY_ERROR"] = "幾何建立失敗——請檢查參數是否合理（如尺寸為正數、位置在實體範圍內）。",
+            ["REFERENCE_NOT_FOUND"] = "參考特徵不存在——請確認 input/references 指向已存在的特徵 ID。",
+        };
+
+        var desc = errorDescriptions.TryGetValue(errorCode, out var d) ? d : "未知錯誤類型，請根據引擎訊息修正。";
+
+        var userPrompt = $@"
+重建失敗，請修正。
+
+錯誤碼：{errorCode}
+引擎訊息：{engineMessage}
+說明：{desc}
+
+目前特徵圖（JSON）：
+{featureGraphJson}
+
+請產生一個 update_feature 或 delete_feature 命令來修正問題。";
+
+        var result = await SendStructuredAsync(userPrompt, LlmCommandSchema);
+        return JsonSerializer.Deserialize<CadCommand>(result, JsonOpts) ?? new CadCommand { Action = "rebuild" };
+    }
+
+    private const string LlmCommandSchema = @"
+{
+  ""type"": ""object"",
+  ""properties"": {
+    ""schema_version"": { ""type"": ""string"", ""const"": ""1.0"" },
+    ""action"": { ""type"": ""string"", ""enum"": [""create_feature"",""update_feature"",""delete_feature"",""rebuild"",""export"",""validate"",""set_material""] },
+    ""document_id"": { ""type"": ""string"" },
+    ""target_feature_id"": { ""type"": ""string"" },
+    ""feature"": { ""type"": ""object"" },
+    ""parameters"": { ""type"": ""object"" },
+    ""preserve"": { ""type"": ""array"", ""items"": { ""type"": ""string"" } },
+    ""standard_parts"": { ""type"": ""object"" },
+    ""reasoning"": { ""type"": ""string"" }
+  },
+  ""required"": [""schema_version"",""action""]
+}";
+
     protected static string BuildSystemPrompt() =>
         "你是 OpenCad 的 AI 建模助手。你的任務是：\n" +
         "1. 理解使用者的繁體中文工程設計需求。\n" +
@@ -154,6 +244,23 @@ public abstract class LlmProviderBase : ILlmProvider
         "3. 你只能透過受控命令操作模型，不能直接存取任意檔案或執行任意程式碼。\n" +
         "4. 標準件（如螺絲孔徑、NEMA 安裝尺寸）只選擇「標準與等級」，數值由引擎查表。\n" +
         "5. 如果需求中有缺少或矛盾的條件，必須提問，不得自行猜測。\n" +
-        "6. 單位以 mm 為主。如果使用者混用單位，自動換算。\n\n" +
+        "6. 單位以 mm 為主。如果使用者混用單位，自動換算。\n" +
+        "7. sketch 特徵必須指定 plane.base：XY=上基準面（俯視）、XZ=前基準面（正視）、YZ=右基準面（側視）。offset 為沿法線偏移量(mm)，預設 0。\n" +
+        "   依零件方位選擇：水平平板上的草圖用 XY；垂直面板上的孔/槽用 XZ 或 YZ。\n" +
+        "8. sketch_entities 支援以下類型：rectangle(矩形)、circle(圓)、polygon(多邊形)、slot(長圓孔)、line(線段)、polyline(多段線)、arc(圓弧)、construction_line(建構線)。\n" +
+        "   pad/pocket 的輸入草圖必須包含至少一個閉合輪廓（rectangle/circle/polygon/slot/closed polyline）。線段、弧、建構線僅為輔助。\n" +
+        "9. hole 特徵支援 hole_type: \"simple\"(簡單孔) 或 \"counterbore\"(沉頭孔)。沉頭孔需指定 standard_parts.fastener.standard（如 M3/M4/M5），由引擎查表取得沉頭直徑與深度。\n" +
+        "10. sweep 特徵：input=輪廓草圖，references=[路徑草圖]。輪廓沿路徑掃描成實體（如管件、彎管）。路徑草圖用 line/polyline/arc 定義路徑線段。\n" +
+        "11. loft 特徵：input=第一個輪廓草圖，references=[第二個、第三個…]。在多個輪廓之間建立漸變實體（如錐形、過渡段）。至少需要兩個輪廓。\n" +
+        "12. 質量屬性：重建後回傳體積、表面積、質量、邊界框。可用 action=\"set_material\" + parameters.material 變更材質（如 pla/abs/aluminum/steel）。\n" +
+        "13. 計畫步驟中，sketch 特徵必須在 step.sketch_entities 中提供草圖實體（如 rectangle/circle/slot 等），不能只放在 parameters。\n" +
+        "   hole 特徵如果需要查表，必須在 step.standard_parts 中指定 fastener.standard 和 fastener.fit。\n" +
+        "   sketch 的 plane 請放在 step.plane，鍵名是 base（如 {\"base\":\"XY\",\"offset\":0}）。\n" +
+        "14. 修改流程（已有特徵時）：action 可以是 update_feature（改參數）、create_feature（加新特徵）、\n" +
+        "    delete_feature（刪特徵，如「刪掉圓角」「取消倒角」）、set_material（改材質）、rebuild（重建/不支援功能時）。\n" +
+        "    使用者說「刪除」「取消」「刪掉」某特徵時，用 delete_feature + target_feature_id，不要用 update_feature。\n" +
+        "15. 孔的陣列/排列：hole 特徵的 positions 參數為 [[x,y],...] 座標列表，可直接建立多孔排列（如四個固定孔）。\n" +
+        "    重要：孔的排列一律使用 positions，不要使用 linear_pattern 或 circular_pattern（Pattern 僅支援實體特徵，不支援切除）。\n" +
+        "16. 目前不支援的功能：rib（加強肋）、draft（拔模角）。如果使用者要求這些，在 reasoning 中說明不支援，action 設為 rebuild（不變更模型）。\n\n" +
         "重要：你的輸出必須是合法 JSON，符合指定的 Schema。";
 }

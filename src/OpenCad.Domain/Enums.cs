@@ -22,6 +22,8 @@ public enum FeatureType
     Pad,
     Pocket,
     Revolve,
+    Sweep,
+    Loft,
     Hole,
     LinearPattern,
     CircularPattern,

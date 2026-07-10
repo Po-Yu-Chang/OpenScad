@@ -2,6 +2,7 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using OpenCad.Application;
 
 namespace OpenCad.Llm;
 
@@ -48,16 +49,27 @@ public class OpenAiCompatibleLlmProvider : LlmProviderBase
         }
     }
 
-    protected override async Task<string> SendStructuredAsync(string prompt, string schema)
+    protected override async Task<string> SendStructuredAsync(string prompt, string schema, List<ChatTurn>? history = null)
     {
+        var messages = new List<object>
+        {
+            new { role = "system", content = $"{_systemPrompt}\n\n你的回覆必須是符合以下 JSON Schema 的單一 JSON 物件（不要加任何說明文字或 markdown 圍欄）：\n{schema}" }
+        };
+
+        if (history != null)
+        {
+            foreach (var turn in history)
+            {
+                messages.Add(new { role = turn.Role.ToLowerInvariant(), content = turn.Content });
+            }
+        }
+
+        messages.Add(new { role = "user", content = prompt });
+
         var requestBody = new
         {
             model = _modelName,
-            messages = new object[]
-            {
-                new { role = "system", content = $"{_systemPrompt}\n\n你的回覆必須是符合以下 JSON Schema 的單一 JSON 物件（不要加任何說明文字或 markdown 圍欄）：\n{schema}" },
-                new { role = "user", content = prompt },
-            },
+            messages = messages.ToArray(),
             response_format = new { type = "json_object" },
             temperature = 0.1,
         };
@@ -72,11 +84,7 @@ public class OpenAiCompatibleLlmProvider : LlmProviderBase
             var fallbackBody = new
             {
                 model = _modelName,
-                messages = new object[]
-                {
-                    new { role = "system", content = $"{_systemPrompt}\n\n你的回覆必須是符合以下 JSON Schema 的單一 JSON 物件（不要加任何說明文字或 markdown 圍欄）：\n{schema}" },
-                    new { role = "user", content = prompt },
-                },
+                messages = messages.ToArray(),
                 temperature = 0.1,
             };
             content = new StringContent(JsonSerializer.Serialize(fallbackBody, JsonOpts), Encoding.UTF8, "application/json");

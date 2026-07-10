@@ -104,6 +104,8 @@
             "pad",
             "pocket",
             "revolve",
+            "sweep",
+            "loft",
             "hole",
             "linear_pattern",
             "circular_pattern",
@@ -147,6 +149,22 @@
         "standard_parts": {
           "type": "object",
           "description": "標準件參考（如 M5 間隙孔，由引擎查表）"
+        },
+        "plane": {
+          "type": "object",
+          "description": "草圖基準面（sketch 類型使用）。預設 XY=上基準面。",
+          "properties": {
+            "base": {
+              "type": "string",
+              "enum": ["XY", "XZ", "YZ"],
+              "description": "XY=上(Top)、XZ=前(Front)、YZ=右(Right)"
+            },
+            "offset": {
+              "$ref": "#/definitions/parameter_value",
+              "description": "沿法向偏移量(mm)，預設 0"
+            }
+          },
+          "required": ["base"]
         },
         "validation": {
           "type": "object",

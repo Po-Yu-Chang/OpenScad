@@ -38,6 +38,7 @@
             padding: 4px 10px; border-radius: 6px; cursor: pointer;
         }
         #view-toolbar button:hover { background: #45475a; }
+        #view-toolbar button.active { background: #89b4fa; color: #1e1e2e; }
 
         /* ── Sketch Mode Overlays ── */
         #sketch-toolbar {
@@ -121,6 +122,24 @@
         <button onclick="setView('top')">俯視</button>
         <button onclick="setView('right')">右視</button>
         <button onclick="zoomFit()">縮放至適合</button>
+        <button id="btn-clip" onclick="toggleClipPlane()">剖面</button>
+        <button id="btn-datum" onclick="onToggleDatumPlanes()">基準面</button>
+    </div>
+    <div id="clip-controls" style="display:none; position:fixed; top:54px; right:12px; background:#1e1e2e; padding:8px 12px; border-radius:8px; border:1px solid #45475a; z-index:100; font-size:12px; color:#cdd6f4;">
+        <label>剖面軸:
+            <select id="clip-axis" onchange="updateClipPlane()">
+                <option value="x">X</option>
+                <option value="y" selected>Y</option>
+                <option value="z">Z</option>
+            </select>
+        </label>
+        <label style="margin-left:8px;">位置:
+            <input type="range" id="clip-pos" min="-100" max="100" value="0" step="1" oninput="updateClipPlane()" style="width:120px; vertical-align:middle;" />
+            <span id="clip-pos-val">0</span> mm
+        </label>
+        <label style="margin-left:8px;">反轉:
+            <input type="checkbox" id="clip-flip" onchange="updateClipPlane()" />
+        </label>
     </div>
 
     <!-- Sketch Mode Toolbar -->
@@ -130,6 +149,8 @@
         <button id="tool-circle" onclick="sketchTool('circle')">○ 圓</button>
         <button id="tool-slot" onclick="sketchTool('slot')">⬭ 長圓孔</button>
         <button id="tool-poly" onclick="sketchTool('polygon')">⬡ 多邊形</button>
+        <button id="tool-line" onclick="sketchTool('line')">╱ 線</button>
+        <button id="tool-arc" onclick="sketchTool('arc')">◜ 弧</button>
         <span class="separator">|</span>
         <button onclick="sketchDeleteSelected()">🗑 刪除</button>
     </div>
@@ -206,6 +227,7 @@
         renderer.setPixelRatio(window.devicePixelRatio);
         renderer.shadowMap.enabled = true;
         renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        renderer.localClippingEnabled = true;
         document.getElementById('viewport').appendChild(renderer.domElement);
 
         // ─── 控制器 ───
@@ -239,11 +261,21 @@
         let originalMaterial = null;
 
         renderer.domElement.addEventListener('click', (event) => {
+            if (sketchMode) return;
             mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
             mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
             raycaster.setFromCamera(mouse, camera);
-            const intersects = raycaster.intersectObjects(scene.children, true);
+            const intersects = raycaster.intersectObjects([...scene.children, ...datumGroup.children], true);
             for (const intersect of intersects) {
+                if (intersect.object.name.startsWith('__plane_')) {
+                    // 隱藏中的基準面不攔截點擊——讓射線繼續檢查後面的模型
+                    if (!intersect.object.visible) continue;
+                    window.opencadNotify({
+                        type: 'datum_plane_clicked',
+                        name: intersect.object.name
+                    });
+                    break;
+                }
                 if (intersect.object.isMesh && intersect.object !== grid) {
                     // 高亮選取
                     if (highlightedMesh && originalMaterial) {
@@ -305,6 +337,9 @@
                 scene.add(currentModel);
                 document.getElementById('loading').style.display = 'none';
 
+                // 若剖面已啟用，重新套用至新模型
+                if (clipPlaneActive) updateClipPlane();
+
                 // 更新資訊
                 document.getElementById('info').textContent =
                     `模型尺寸: ${(size.x).toFixed(1)} × ${(size.y).toFixed(1)} × ${(size.z).toFixed(1)} mm`;
@@ -344,6 +379,49 @@
             }
             controls.target.set(0, 0, 0);
             controls.update();
+        };
+
+        // ─── 剖面視圖 ───
+        let clipPlaneActive = false;
+        let clipPlane = new THREE.Vector3(0, -1, 0);
+        let clipConstant = 0;
+
+        window.toggleClipPlane = function() {
+            clipPlaneActive = !clipPlaneActive;
+            document.getElementById('clip-controls').style.display = clipPlaneActive ? 'block' : 'none';
+            document.getElementById('btn-clip').classList.toggle('active', clipPlaneActive);
+            updateClipPlane();
+        };
+
+        window.updateClipPlane = function() {
+            if (!clipPlaneActive || !currentModel) {
+                if (currentModel) {
+                    currentModel.traverse((child) => {
+                        if (child.isMesh && child.material) {
+                            child.material.clippingPlanes = [];
+                        }
+                    });
+                }
+                return;
+            }
+            const axis = document.getElementById('clip-axis').value;
+            const pos = parseFloat(document.getElementById('clip-pos').value);
+            const flip = document.getElementById('clip-flip').checked;
+            document.getElementById('clip-pos-val').textContent = pos;
+
+            const dir = flip ? -1 : 1;
+            if (axis === 'x') clipPlane = new THREE.Vector3(dir, 0, 0);
+            else if (axis === 'y') clipPlane = new THREE.Vector3(0, dir, 0);
+            else clipPlane = new THREE.Vector3(0, 0, dir);
+            clipConstant = pos * -dir;  // Three.js plane: dot(normal, point) + constant = 0
+
+            const plane = new THREE.Plane(clipPlane, clipConstant);
+            currentModel.traverse((child) => {
+                if (child.isMesh && child.material) {
+                    child.material.clippingPlanes = [plane];
+                    child.material.clipShadows = true;
+                }
+            });
         };
 
         // 依 mesh 名稱高亮（供特徵樹選取連動）。
@@ -396,6 +474,7 @@
 
         let sketchMode = false;
         let sketchFeatureId = null;
+        let sketchPlaneBase = 'XY';
         let sketchEntities = [];
         let sketchMeshes = [];
         let sketchDimLabels = [];
@@ -410,21 +489,40 @@
         let pmCallback = null;
         let pmEditingIndex = -1;
 
-        function enterSketchMode(featureId, entities) {
+        function enterSketchMode(featureId, entities, plane) {
             sketchMode = true;
             sketchFeatureId = featureId;
             sketchEntities = entities ? (Array.isArray(entities) ? entities : JSON.parse(entities)) : [];
             sketchSelectedIndex = -1;
             sketchTool = 'select';
 
-            // Save and switch to orthographic top-down camera
+            // Parse plane (default XY = Top)
+            var planeObj = (plane && typeof plane === 'object') ? plane : (plane ? JSON.parse(plane) : {});
+            sketchPlaneBase = planeObj.base || 'XY';
+
+            // Save and switch to orthographic camera, oriented normal-to the plane
             savedCamera = camera;
             sketchOrthoCamera = new THREE.OrthographicCamera(
                 -window.innerWidth / 2, window.innerWidth / 2,
                 window.innerHeight / 2, -window.innerHeight / 2,
-                -1000, 1000
+                -1000, 2000
             );
-            sketchOrthoCamera.position.set(0, 0, 500);
+
+            if (sketchPlaneBase === 'XZ') {
+                // Front plane: camera looks along -Y (from the plane's anti-normal side,
+                // matching build123d Plane.XZ's z_dir=-Y) so screen-right = +X, matching
+                // the XY/YZ views instead of being horizontally mirrored.
+                sketchOrthoCamera.position.set(0, -500, 0);
+                sketchOrthoCamera.up.set(0, 0, 1);
+            } else if (sketchPlaneBase === 'YZ') {
+                // Right plane: camera looks along +X, grid in YZ
+                sketchOrthoCamera.position.set(500, 0, 0);
+                sketchOrthoCamera.up.set(0, 0, 1);
+            } else {
+                // XY = Top: camera looks along +Z, grid in XY
+                sketchOrthoCamera.position.set(0, 0, 500);
+                sketchOrthoCamera.up.set(0, 1, 0);
+            }
             sketchOrthoCamera.lookAt(0, 0, 0);
             camera = sketchOrthoCamera;
 
@@ -433,29 +531,55 @@
             controls.target.set(0, 0, 0);
             controls.update();
 
-            // Hide 3D model
+            // Hide 3D model and datum planes
             if (currentModel) currentModel.visible = false;
             grid.visible = false;
+            datumGroup.visible = false;
 
-            // Show sketch grid (10mm spacing)
+            // Show sketch grid (10mm spacing), oriented to the plane
             sketchGrid = new THREE.GridHelper(500, 50, 0x45475a, 0x313244);
-            sketchGrid.rotation.x = Math.PI / 2;  // XY plane
+            if (sketchPlaneBase === 'XY') {
+                // GridHelper is in XZ by default; rotate to XY
+                sketchGrid.rotation.x = Math.PI / 2;
+            } else if (sketchPlaneBase === 'YZ') {
+                // Rotate grid to YZ plane
+                sketchGrid.rotation.z = Math.PI / 2;
+            }
+            // XZ: GridHelper default is already XZ, no rotation needed
             scene.add(sketchGrid);
 
-            // X/Y axes (red/green)
-            const axisMat = new THREE.LineBasicMaterial({ color: 0xf38ba8 });
-            const axisGeo = new THREE.BufferGeometry().setFromPoints([
+            // Axes (red=X, green=Y or Z depending on plane)
+            sketchAxes = new THREE.Group();
+            var axisXGeo = new THREE.BufferGeometry().setFromPoints([
                 new THREE.Vector3(-250, 0, 0), new THREE.Vector3(250, 0, 0)
             ]);
-            sketchAxes = new THREE.LineSegments(axisGeo, axisMat);
-            scene.add(sketchAxes);
+            var axisX = new THREE.LineSegments(axisXGeo, new THREE.LineBasicMaterial({ color: 0xf38ba8 }));
+            sketchAxes.add(axisX);
 
-            const axisYGeo = new THREE.BufferGeometry().setFromPoints([
-                new THREE.Vector3(0, -250, 0), new THREE.Vector3(0, 250, 0)
-            ]);
-            const axisYMat = new THREE.LineBasicMaterial({ color: 0xa6e3a1 });
-            const axisY = new THREE.LineSegments(axisYGeo, axisYMat);
-            sketchAxes.add(axisY);
+            if (sketchPlaneBase === 'XY') {
+                // Y axis is green
+                var axisYGeo = new THREE.BufferGeometry().setFromPoints([
+                    new THREE.Vector3(0, -250, 0), new THREE.Vector3(0, 250, 0)
+                ]);
+                sketchAxes.add(new THREE.LineSegments(axisYGeo, new THREE.LineBasicMaterial({ color: 0xa6e3a1 })));
+            } else if (sketchPlaneBase === 'XZ') {
+                // Z axis is green (vertical on screen)
+                var axisZGeo = new THREE.BufferGeometry().setFromPoints([
+                    new THREE.Vector3(0, 0, -250), new THREE.Vector3(0, 0, 250)
+                ]);
+                sketchAxes.add(new THREE.LineSegments(axisZGeo, new THREE.LineBasicMaterial({ color: 0xa6e3a1 })));
+            } else {
+                // YZ: Y horizontal, Z vertical
+                var axisY2Geo = new THREE.BufferGeometry().setFromPoints([
+                    new THREE.Vector3(0, -250, 0), new THREE.Vector3(0, 250, 0)
+                ]);
+                sketchAxes.add(new THREE.LineSegments(axisY2Geo, new THREE.LineBasicMaterial({ color: 0xa6e3a1 })));
+                var axisZ2Geo = new THREE.BufferGeometry().setFromPoints([
+                    new THREE.Vector3(0, 0, -250), new THREE.Vector3(0, 0, 250)
+                ]);
+                sketchAxes.add(new THREE.LineSegments(axisZ2Geo, new THREE.LineBasicMaterial({ color: 0xa6e3a1 })));
+            }
+            scene.add(sketchAxes);
 
             // Show UI overlays
             document.getElementById('view-toolbar').style.display = 'none';
@@ -471,6 +595,7 @@
         function exitSketchMode() {
             if (!sketchMode) return;
             sketchMode = false;
+            sketchPlaneBase = 'XY';
 
             // Restore camera
             if (savedCamera) {
@@ -481,9 +606,10 @@
             controls.enableRotate = true;
             controls.update();
 
-            // Restore model
+            // Restore model and datum planes
             if (currentModel) currentModel.visible = true;
             grid.visible = true;
+            datumGroup.visible = true;
 
             // Remove sketch grid and axes
             if (sketchGrid) { scene.remove(sketchGrid); sketchGrid = null; }
@@ -516,6 +642,13 @@
             });
         }
 
+        // Map 2D sketch coords (x, y) to 3D world coords based on current plane
+        function sketchToWorld(x, y) {
+            if (sketchPlaneBase === 'XZ') return new THREE.Vector3(x, 0, y);
+            if (sketchPlaneBase === 'YZ') return new THREE.Vector3(0, x, y);
+            return new THREE.Vector3(x, y, 0);  // XY
+        }
+
         function createEntityMesh(entity, isSelected) {
             const color = isSelected ? 0xf9e2af : 0x89b4fa;
             const mat = new THREE.LineBasicMaterial({ color });
@@ -525,11 +658,11 @@
                 const cx = entity.center_x || 0, cy = entity.center_y || 0;
                 const w = entity.width || 0, h = entity.height || 0;
                 const geo = new THREE.BufferGeometry().setFromPoints([
-                    new THREE.Vector3(cx - w/2, cy - h/2, 0),
-                    new THREE.Vector3(cx + w/2, cy - h/2, 0),
-                    new THREE.Vector3(cx + w/2, cy + h/2, 0),
-                    new THREE.Vector3(cx - w/2, cy + h/2, 0),
-                    new THREE.Vector3(cx - w/2, cy - h/2, 0),
+                    sketchToWorld(cx - w/2, cy - h/2),
+                    sketchToWorld(cx + w/2, cy - h/2),
+                    sketchToWorld(cx + w/2, cy + h/2),
+                    sketchToWorld(cx - w/2, cy + h/2),
+                    sketchToWorld(cx - w/2, cy - h/2),
                 ]);
                 return new THREE.Line(geo, mat);
             }
@@ -541,7 +674,7 @@
                 const segs = 64;
                 for (let i = 0; i <= segs; i++) {
                     const a = (i / segs) * Math.PI * 2;
-                    points.push(new THREE.Vector3(cx + Math.cos(a) * r, cy + Math.sin(a) * r, 0));
+                    points.push(sketchToWorld(cx + Math.cos(a) * r, cy + Math.sin(a) * r));
                 }
                 const geo = new THREE.BufferGeometry().setFromPoints(points);
                 return new THREE.Line(geo, mat);
@@ -554,11 +687,11 @@
                 const r = wid / 2;
                 const halfL = Math.max(0, len / 2 - r);
                 const cos = Math.cos(ang), sin = Math.sin(ang);
-                // Helper to transform local→world
+                // Helper to transform local→sketch→world
                 function rot(x, y) {
-                    return new THREE.Vector3(
+                    return sketchToWorld(
                         x * cos - y * sin + cx,
-                        x * sin + y * cos + cy, 0
+                        x * sin + y * cos + cy
                     );
                 }
                 const points = [];
@@ -590,10 +723,59 @@
                 const points = [];
                 for (let i = 0; i <= sides; i++) {
                     const a = (i / sides) * Math.PI * 2 - Math.PI / 2;
-                    points.push(new THREE.Vector3(cx + Math.cos(a) * r, cy + Math.sin(a) * r, 0));
+                    points.push(sketchToWorld(cx + Math.cos(a) * r, cy + Math.sin(a) * r));
                 }
                 const geo = new THREE.BufferGeometry().setFromPoints(points);
                 return new THREE.Line(geo, mat);
+            }
+
+            if (type === 'line') {
+                const x1 = entity.x1 || 0, y1 = entity.y1 || 0;
+                const x2 = entity.x2 || 0, y2 = entity.y2 || 0;
+                const geo = new THREE.BufferGeometry().setFromPoints([
+                    sketchToWorld(x1, y1),
+                    sketchToWorld(x2, y2),
+                ]);
+                return new THREE.Line(geo, mat);
+            }
+
+            if (type === 'polyline') {
+                const verts = entity.vertices || [];
+                const closed = entity.closed || false;
+                const points = verts.map(v => sketchToWorld(v[0], v[1]));
+                if (closed && points.length > 0) points.push(points[0]);
+                if (points.length < 2) return null;
+                const geo = new THREE.BufferGeometry().setFromPoints(points);
+                return new THREE.Line(geo, mat);
+            }
+
+            if (type === 'arc') {
+                const cx = entity.center_x || 0, cy = entity.center_y || 0;
+                const r = entity.radius || 0;
+                const sa = (entity.start_angle || 0) * Math.PI / 180;
+                const ea = (entity.end_angle || 0) * Math.PI / 180;
+                const points = [];
+                const segs = 32;
+                for (let i = 0; i <= segs; i++) {
+                    const a = sa + (ea - sa) * (i / segs);
+                    points.push(sketchToWorld(cx + Math.cos(a) * r, cy + Math.sin(a) * r));
+                }
+                const geo = new THREE.BufferGeometry().setFromPoints(points);
+                return new THREE.Line(geo, mat);
+            }
+
+            if (type === 'construction_line') {
+                // Construction lines are auxiliary, render as thin dashed
+                const x1 = entity.x1 || 0, y1 = entity.y1 || 0;
+                const x2 = entity.x2 || 0, y2 = entity.y2 || 0;
+                const dashedMat = new THREE.LineDashedMaterial({ color: 0x888888, dashSize: 1, gapSize: 1 });
+                const geo = new THREE.BufferGeometry().setFromPoints([
+                    sketchToWorld(x1, y1),
+                    sketchToWorld(x2, y2),
+                ]);
+                const line = new THREE.Line(geo, dashedMat);
+                line.computeLineDistances();
+                return line;
             }
 
             return null;
@@ -607,6 +789,10 @@
             else if (type === 'circle') text = `Ø${(entity.radius * 2).toFixed(1)}`;
             else if (type === 'slot') text = `${entity.length}×${entity.width}`;
             else if (type === 'polygon') text = `${entity.sides}邊 R${entity.radius}`;
+            else if (type === 'line') text = `(${entity.x1},${entity.y1})→(${entity.x2},${entity.y2})`;
+            else if (type === 'arc') text = `R${entity.radius} ${entity.start_angle}°→${entity.end_angle}°`;
+            else if (type === 'polyline') text = `${(entity.vertices || []).length}點${entity.closed ? '（閉合）' : ''}`;
+            else if (type === 'construction_line') text = '構造線';
 
             const label = document.createElement('div');
             label.className = 'dim-label';
@@ -629,8 +815,20 @@
             sketchEntities.forEach((entity, idx) => {
                 const label = sketchDimLabels[idx];
                 if (!label) return;
-                const cx = entity.center_x || 0, cy = entity.center_y || 0;
-                const pos = new THREE.Vector3(cx, cy, 0);
+                const type = entity.entity_type || entity.type;
+                let cx, cy;
+                if (type === 'line' || type === 'construction_line') {
+                    cx = ((entity.x1 || 0) + (entity.x2 || 0)) / 2;
+                    cy = ((entity.y1 || 0) + (entity.y2 || 0)) / 2;
+                } else if (type === 'polyline') {
+                    const verts = entity.vertices || [];
+                    cx = verts.reduce((s, v) => s + v[0], 0) / Math.max(1, verts.length);
+                    cy = verts.reduce((s, v) => s + v[1], 0) / Math.max(1, verts.length);
+                } else {
+                    cx = entity.center_x || 0;
+                    cy = entity.center_y || 0;
+                }
+                const pos = sketchToWorld(cx, cy);
                 pos.project(camera);
                 label.style.left = ((pos.x + 1) / 2 * w) + 'px';
                 label.style.top = ((-pos.y + 1) / 2 * h) + 'px';
@@ -646,7 +844,7 @@
         window.sketchTool = function(tool) {
             sketchTool = tool;
             // Update active button
-            ['select', 'rect', 'circle', 'slot', 'polygon'].forEach(t => {
+            ['select', 'rect', 'circle', 'slot', 'polygon', 'line', 'arc'].forEach(t => {
                 const btn = document.getElementById('tool-' + t);
                 if (btn) btn.classList.toggle('active', t === tool);
             });
@@ -663,17 +861,27 @@
             const ndcY = -((event.clientY - rect.top) / rect.height) * 2 + 1;
             const vec = new THREE.Vector3(ndcX, ndcY, 0);
             vec.unproject(camera);
-            const worldX = vec.x;
-            const worldY = vec.y;
+
+            // Map unprojected coords to sketch plane 2D coords
+            var sx, sy;
+            if (sketchPlaneBase === 'XZ') {
+                sx = vec.x; sy = vec.z;  // Front plane: X=horizontal, Z=vertical
+            } else if (sketchPlaneBase === 'YZ') {
+                sx = vec.y; sy = vec.z;  // Right plane: Y=horizontal, Z=vertical
+            } else {
+                sx = vec.x; sy = vec.y;  // XY (Top): X=horizontal, Y=vertical
+            }
 
             // Snap to 1mm
-            const sx = Math.round(worldX);
-            const sy = Math.round(worldY);
+            sx = Math.round(sx);
+            sy = Math.round(sy);
 
             if (sketchTool === 'rect') openRectPM(sx, sy);
             else if (sketchTool === 'circle') openCirclePM(sx, sy);
             else if (sketchTool === 'slot') openSlotPM(sx, sy);
             else if (sketchTool === 'polygon') openPolygonPM(sx, sy);
+            else if (sketchTool === 'line') openLinePM(sx, sy);
+            else if (sketchTool === 'arc') openArcPM(sx, sy);
         });
 
         // ── PropertyManager ──
@@ -775,12 +983,62 @@
             pmEditingIndex = editIdx;
         }
 
+        function openLinePM(cx, cy, existing, editIdx) {
+            const x2 = existing ? existing.x2 : cx + 20;
+            const y2 = existing ? existing.y2 : cy;
+            // Line uses cx,cy as start point (x1,y1)
+            showPM('線段', `
+                <label>終點 X<input type="number" id="pm-x2" step="1" value="${x2}"></label>
+                <label>終點 Y<input type="number" id="pm-y2" step="1" value="${y2}"></label>
+            `, cx, cy, () => {
+                const e = {
+                    entity_type: 'line',
+                    x1: parseFloat(document.getElementById('pm-cx').value),
+                    y1: parseFloat(document.getElementById('pm-cy').value),
+                    x2: parseFloat(document.getElementById('pm-x2').value),
+                    y2: parseFloat(document.getElementById('pm-y2').value),
+                };
+                if (editIdx >= 0) sketchEntities[editIdx] = e;
+                else sketchEntities.push(e);
+                renderSketchEntities();
+                updateSketchStatus();
+            });
+            pmEditingIndex = editIdx;
+        }
+
+        function openArcPM(cx, cy, existing, editIdx) {
+            const r = existing ? existing.radius : 10;
+            const sa = existing ? existing.start_angle : 0;
+            const ea = existing ? existing.end_angle : 90;
+            showPM('圓弧', `
+                <label>半徑<input type="number" id="pm-r" step="1" value="${r}"></label>
+                <label>起角°<input type="number" id="pm-sa" step="1" value="${sa}"></label>
+                <label>終角°<input type="number" id="pm-ea" step="1" value="${ea}"></label>
+            `, cx, cy, () => {
+                const e = {
+                    entity_type: 'arc',
+                    center_x: parseFloat(document.getElementById('pm-cx').value),
+                    center_y: parseFloat(document.getElementById('pm-cy').value),
+                    radius: parseFloat(document.getElementById('pm-r').value),
+                    start_angle: parseFloat(document.getElementById('pm-sa').value),
+                    end_angle: parseFloat(document.getElementById('pm-ea').value),
+                };
+                if (editIdx >= 0) sketchEntities[editIdx] = e;
+                else sketchEntities.push(e);
+                renderSketchEntities();
+                updateSketchStatus();
+            });
+            pmEditingIndex = editIdx;
+        }
+
         function openPropertyManager(type, entity, editIdx) {
-            const cx = entity.center_x || 0, cy = entity.center_y || 0;
+            const cx = entity.center_x || entity.x1 || 0, cy = entity.center_y || entity.y1 || 0;
             if (type === 'rectangle') openRectPM(cx, cy, entity, editIdx);
             else if (type === 'circle') openCirclePM(cx, cy, entity, editIdx);
             else if (type === 'slot') openSlotPM(cx, cy, entity, editIdx);
             else if (type === 'polygon') openPolygonPM(cx, cy, entity, editIdx);
+            else if (type === 'line') openLinePM(entity.x1 || 0, entity.y1 || 0, entity, editIdx);
+            else if (type === 'arc') openArcPM(cx, cy, entity, editIdx);
         }
 
         window.pmOk = function() {
@@ -823,11 +1081,117 @@
         };
 
         // ─── 動畫迴圈 ───
+        // ─── Triad (座標軸指示器) ───
+        const triadScene = new THREE.Scene();
+        const triadCamera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
+        triadCamera.position.set(0, 0, 5);
+
+        function initTriad() {
+            const origin = new THREE.Vector3(0, 0, 0);
+            const size = 1.0;
+            triadScene.add(new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), origin, size, 0xf38ba8, 0.2, 0.15));
+            triadScene.add(new THREE.ArrowHelper(new THREE.Vector3(0, 1, 0), origin, size, 0xa6e3a1, 0.2, 0.15));
+            triadScene.add(new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1), origin, size, 0x89b4fa, 0.2, 0.15));
+
+            const makeLabel = (text, color) => {
+                const canvas = document.createElement('canvas');
+                canvas.width = 64; canvas.height = 64;
+                const ctx = canvas.getContext('2d');
+                ctx.font = 'Bold 40px sans-serif';
+                ctx.fillStyle = color;
+                ctx.textAlign = 'center';
+                ctx.fillText(text, 32, 48);
+                const tex = new THREE.CanvasTexture(canvas);
+                const mat = new THREE.SpriteMaterial({ map: tex });
+                const sprite = new THREE.Sprite(mat);
+                sprite.scale.set(0.6, 0.6, 1);
+                return sprite;
+            };
+            const lx = makeLabel('X', '#f38ba8'); lx.position.set(1.2, 0, 0); triadScene.add(lx);
+            const ly = makeLabel('Y', '#a6e3a1'); ly.position.set(0, 1.2, 0); triadScene.add(ly);
+            const lz = makeLabel('Z', '#89b4fa'); lz.position.set(0, 0, 1.2); triadScene.add(lz);
+        }
+        initTriad();
+
+        // ─── Datum Planes (基準面) ───
+        const datumGroup = new THREE.Group();
+        scene.add(datumGroup);
+        const datumPlanes = {};
+
+        function initDatumPlanes() {
+            const size = 100;
+            const createPlane = (name, rotation, color) => {
+                const geometry = new THREE.PlaneGeometry(size, size);
+                const material = new THREE.MeshBasicMaterial({
+                    color: color, transparent: true, opacity: 0.1, side: THREE.DoubleSide, depthWrite: false
+                });
+                const mesh = new THREE.Mesh(geometry, material);
+                mesh.rotation.copy(rotation);
+                mesh.name = `__plane_${name.toLowerCase()}`;
+                const edges = new THREE.EdgesGeometry(geometry);
+                const line = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ 
+                    color: color, transparent: true, opacity: 0.3 
+                }));
+                mesh.add(line);
+                datumGroup.add(mesh);
+                datumPlanes[name] = mesh;
+            };
+            createPlane('XY', new THREE.Euler(0, 0, 0), 0x89b4fa);
+            createPlane('XZ', new THREE.Euler(-Math.PI/2, 0, 0), 0xa6e3a1);
+            createPlane('YZ', new THREE.Euler(0, Math.PI/2, 0), 0xf38ba8);
+        }
+        initDatumPlanes();
+
+        // SolidWorks 慣例：基準面預設隱藏；特徵樹選取該面時單獨顯示，
+        // 工具列「基準面」按鈕可切換三面常駐顯示（供視窗內點選）。
+        const DATUM_COLORS = { XY: 0x89b4fa, XZ: 0xa6e3a1, YZ: 0xf38ba8 };
+        let datumPlanesVisible = false;   // 工具列常駐開關
+        let datumSelectedName = null;     // 特徵樹目前選取的基準面
+
+        function updateDatumVisibility() {
+            for (const key in datumPlanes) {
+                const mesh = datumPlanes[key];
+                const isSelected = mesh.name === datumSelectedName;
+                mesh.visible = datumPlanesVisible || isSelected;
+                mesh.material.opacity = isSelected ? 0.4 : 0.1;
+                mesh.material.color.set(isSelected ? 0xf9e2af : DATUM_COLORS[key]);
+            }
+        }
+        updateDatumVisibility();  // 初始：全部隱藏
+
+        window.highlightDatumPlane = function(name) {
+            datumSelectedName = name || null;
+            updateDatumVisibility();
+        };
+
+        window.onToggleDatumPlanes = function() {
+            datumPlanesVisible = !datumPlanesVisible;
+            updateDatumVisibility();
+            document.getElementById('btn-datum').classList.toggle('active', datumPlanesVisible);
+        };
+
         function animate() {
             requestAnimationFrame(animate);
             controls.update();
-            renderer.render(scene, camera);
-            if (sketchMode) updateDimLabelPositions();
+
+            if (sketchMode) {
+                renderer.render(scene, camera);
+                updateDimLabelPositions();
+            } else {
+                renderer.autoClear = false;
+                renderer.clear();
+                renderer.render(scene, camera);
+
+                // Render Triad
+                renderer.clearDepth();
+                const triadSize = 100;
+                triadCamera.quaternion.copy(camera.quaternion);
+                triadCamera.position.set(0, 0, 5).applyQuaternion(camera.quaternion);
+                triadCamera.lookAt(0, 0, 0);
+                renderer.setViewport(window.innerWidth - triadSize - 10, 10, triadSize, triadSize);
+                renderer.render(triadScene, triadCamera);
+                renderer.setViewport(0, 0, window.innerWidth, window.innerHeight);
+            }
         }
         animate();
 

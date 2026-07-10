@@ -38,6 +38,9 @@ public class CadCommand
     [JsonPropertyName("sketch_entities")]
     public List<Dictionary<string, object>>? SketchEntities { get; set; }
 
+    [JsonPropertyName("plane")]
+    public Dictionary<string, object>? Plane { get; set; }
+
     [JsonPropertyName("reasoning")]
     public string Reasoning { get; set; } = string.Empty;
 }
@@ -70,6 +73,15 @@ public class DesignStep
 
     [JsonPropertyName("parameters")]
     public Dictionary<string, object> Parameters { get; set; } = new();
+
+    [JsonPropertyName("sketch_entities")]
+    public List<Dictionary<string, object>>? SketchEntities { get; set; }
+
+    [JsonPropertyName("standard_parts")]
+    public Dictionary<string, object>? StandardParts { get; set; }
+
+    [JsonPropertyName("plane")]
+    public Dictionary<string, object>? Plane { get; set; }
 }
 
 /// <summary>

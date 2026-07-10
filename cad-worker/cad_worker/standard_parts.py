@@ -69,3 +69,56 @@ def get_nema_mounting(size: str) -> dict[str, float]:
         valid = ", ".join(_NEMA.keys())
         raise ValueError(f"未知的 NEMA 尺寸 '{size}'，有效值：{valid}")
     return dict(dims)
+
+
+# 材質密度表（g/cm³）
+_MATERIAL_DENSITIES: dict[str, float] = {
+    "pla": 1.24,
+    "abs": 1.05,
+    "petg": 1.27,
+    "asa": 1.07,
+    "nylon": 1.14,
+    "aluminum": 2.70,
+    "steel": 7.85,
+    "stainless_steel": 8.00,
+    "brass": 8.53,
+    "copper": 8.96,
+    "titanium": 4.51,
+    "wood_pine": 0.43,
+    "wood_oak": 0.75,
+}
+
+
+def get_material_density(material: str) -> float:
+    """查材質密度（g/cm³）。
+
+    Args:
+        material: 材質名稱（不分大小寫），如 "pla"、"aluminum"、"steel"
+
+    Returns:
+        密度（g/cm³）
+
+    Raises:
+        ValueError: 材質不存在
+    """
+    key = material.lower().replace(" ", "_")
+    density = _MATERIAL_DENSITIES.get(key)
+    if density is None:
+        valid = ", ".join(sorted(_MATERIAL_DENSITIES.keys()))
+        raise ValueError(f"未知的材質 '{material}'，有效值：{valid}")
+    return density
+
+
+def calculate_mass(volume_mm3: float, material: str) -> float:
+    """由體積（mm³）與材質計算質量（g）。
+
+    Args:
+        volume_mm3: 體積（立方毫米）
+        material: 材質名稱
+
+    Returns:
+        質量（公克）
+    """
+    density_g_cm3 = get_material_density(material)
+    volume_cm3 = volume_mm3 / 1000.0  # mm³ → cm³
+    return volume_cm3 * density_g_cm3

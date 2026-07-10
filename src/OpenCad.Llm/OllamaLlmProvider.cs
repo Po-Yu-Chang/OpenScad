@@ -1,6 +1,7 @@
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
+using OpenCad.Application;
 
 namespace OpenCad.Llm;
 
@@ -22,12 +23,25 @@ public class OllamaLlmProvider : LlmProviderBase
         _systemPrompt = BuildSystemPrompt();
     }
 
-    protected override async Task<string> SendStructuredAsync(string prompt, string schema)
+    protected override async Task<string> SendStructuredAsync(string prompt, string schema, List<ChatTurn>? history = null)
     {
+        var sb = new StringBuilder();
+        sb.AppendLine($"System: {_systemPrompt}");
+        if (history != null)
+        {
+            foreach (var turn in history)
+            {
+                // Role 通常為 user 或 assistant
+                var role = turn.Role.Equals("assistant", StringComparison.OrdinalIgnoreCase) ? "Assistant" : "User";
+                sb.AppendLine($"{role}: {turn.Content}");
+            }
+        }
+        sb.AppendLine($"User: {prompt}");
+
         var requestBody = new
         {
             model = _modelName,
-            prompt = $"{_systemPrompt}\n\n{prompt}",
+            prompt = sb.ToString(),
             format = JsonSerializer.Deserialize<JsonElement>(schema),
             stream = false,
             options = new { temperature = 0.1, top_p = 0.9 },

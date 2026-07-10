@@ -36,7 +36,7 @@ public class CadWorkerClient : ICadWorker
 
     public async Task<string> CreateProjectAsync(string name, string description = "")
     {
-        var req = new { name, description, units = "mm", engine = "build123d" };
+        var req = new { name, description, units = "mm", engine = "build123d", material = "pla" };
         var json = JsonSerializer.Serialize(req, JsonOpts);
         var content = new StringContent(json, Encoding.UTF8, "application/json");
 
@@ -107,7 +107,44 @@ public class CadWorkerClient : ICadWorker
             FeatureCount = result.Value.TryGetProperty("feature_count", out var fc) ? fc.GetInt32() : 0,
             ErrorCode = result.Value.TryGetProperty("error_code", out var ec) ? ec.GetString() : null,
             EngineMessage = result.Value.TryGetProperty("engine_message", out var em) ? em.GetString() : null,
+            MassProperties = result.Value.TryGetProperty("mass_properties", out var mp) ? ParseMassProperties(mp) : null,
         };
+    }
+
+    /// <summary>
+    /// 解析質量屬性 JSON。
+    /// </summary>
+    private static MassProperties? ParseMassProperties(JsonElement mp)
+    {
+        if (mp.ValueKind != JsonValueKind.Object)
+            return null;
+
+        var props = new MassProperties
+        {
+            VolumeMm3 = mp.TryGetProperty("volume_mm3", out var v) ? v.GetDouble() : 0,
+            SurfaceAreaMm2 = mp.TryGetProperty("surface_area_mm2", out var sa) ? sa.GetDouble() : 0,
+            MassG = mp.TryGetProperty("mass_g", out var mg) ? mg.GetDouble() : 0,
+            Material = mp.TryGetProperty("material", out var mat) ? mat.GetString() ?? "" : "",
+            DensityGcm3 = mp.TryGetProperty("density_g_cm3", out var den) ? den.GetDouble() : 0,
+        };
+
+        if (mp.TryGetProperty("bounding_box_mm", out var bb) && bb.ValueKind == JsonValueKind.Object)
+        {
+            props.BoundingBoxMm = new BoundingBoxMm
+            {
+                MinX = bb.TryGetProperty("min_x", out var mn) ? mn.GetDouble() : 0,
+                MinY = bb.TryGetProperty("min_y", out var my) ? my.GetDouble() : 0,
+                MinZ = bb.TryGetProperty("min_z", out var mz) ? mz.GetDouble() : 0,
+                MaxX = bb.TryGetProperty("max_x", out var mx) ? mx.GetDouble() : 0,
+                MaxY = bb.TryGetProperty("max_y", out var my2) ? my2.GetDouble() : 0,
+                MaxZ = bb.TryGetProperty("max_z", out var mz2) ? mz2.GetDouble() : 0,
+                SizeX = bb.TryGetProperty("size_x", out var sx) ? sx.GetDouble() : 0,
+                SizeY = bb.TryGetProperty("size_y", out var sy) ? sy.GetDouble() : 0,
+                SizeZ = bb.TryGetProperty("size_z", out var sz) ? sz.GetDouble() : 0,
+            };
+        }
+
+        return props;
     }
 
     /// <summary>

@@ -94,6 +94,8 @@ public class FeatureNode
     public string FeatureId { get; set; } = string.Empty;
     public string DisplayName { get; set; } = string.Empty;
     public string FeatureType { get; set; } = string.Empty;
+    public bool IsDatumPlane { get; set; } = false;
+    public string? PlaneBase { get; set; } = null;
     public string TypeIcon => FeatureType switch
     {
         "sketch" => "▭",
@@ -104,6 +106,8 @@ public class FeatureNode
         "chamfer" => "◢",
         "linear_pattern" => "⊞",
         "circular_pattern" => "⊛",
+        "datum_plane" => "▱",
+        "origin" => "✛",
         _ => "▸",
     };
     public List<ParameterItem> Parameters { get; set; } = new();

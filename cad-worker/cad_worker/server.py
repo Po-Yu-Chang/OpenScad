@@ -122,6 +122,7 @@ class CreateProjectRequest(BaseModel):
     description: str = ""
     units: str = "mm"
     engine: str = "build123d"
+    material: str = "pla"
 
 
 class ApplyCommandRequest(BaseModel):
@@ -134,6 +135,7 @@ class ApplyCommandRequest(BaseModel):
     export_format: str = "all"
     standard_parts: dict[str, Any] | None = None
     sketch_entities: list[dict[str, Any]] | None = None
+    plane: dict[str, Any] | None = None
     reasoning: str = ""
 
 
@@ -171,6 +173,7 @@ async def create_project(req: CreateProjectRequest, _: None = Depends(verify_tok
         "description": req.description,
         "units": req.units,
         "engine": req.engine,
+        "material": req.material,
         "created_at": now,
         "modified_at": now,
     }
@@ -212,9 +215,14 @@ async def apply_command(project_id: str, req: ApplyCommandRequest, _: None = Dep
         return {"status": "created", "feature_id": feature.feature_id}
 
     elif req.action == "update_feature":
-        if req.target_feature_id is None or (req.parameters is None and req.standard_parts is None and req.sketch_entities is None):
-            raise HTTPException(400, "update_feature 需要 target_feature_id 和 parameters、standard_parts 或 sketch_entities")
-        feature = graph.update_feature(req.target_feature_id, req.parameters or {}, req.standard_parts, req.sketch_entities)
+        if req.target_feature_id is None or (
+            req.parameters is None and req.standard_parts is None and
+            req.sketch_entities is None and req.plane is None
+        ):
+            raise HTTPException(400, "update_feature 需要 target_feature_id 和 parameters、standard_parts、sketch_entities 或 plane")
+        feature = graph.update_feature(
+            req.target_feature_id, req.parameters or {}, req.standard_parts, req.sketch_entities, req.plane,
+        )
         _save_revision(proj, req)
         return {"status": "updated", "feature_id": feature.feature_id}
 
@@ -248,6 +256,21 @@ async def apply_command(project_id: str, req: ApplyCommandRequest, _: None = Dep
 
     elif req.action == "export":
         return await _export(project_id, proj, req.export_format or "all")
+
+    elif req.action == "set_material":
+        material = req.parameters or {}
+        material_name = material.get("material")
+        if not material_name:
+            raise HTTPException(400, "set_material 需要 parameters.material")
+        from .standard_parts import get_material_density
+        get_material_density(material_name)  # 驗證材質存在
+        proj["manifest"]["material"] = material_name.lower().replace(" ", "_")
+        from datetime import datetime, timezone
+        proj["manifest"]["modified_at"] = datetime.now(timezone.utc).isoformat()
+        (proj["dir"] / "manifest.json").write_text(
+            json.dumps(proj["manifest"], ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        return {"status": "material_set", "material": material_name}
 
     else:
         raise HTTPException(400, f"未知的 action: {req.action}")
@@ -476,9 +499,35 @@ async def _rebuild(project_id: str, proj: dict[str, Any]) -> dict[str, Any]:
         # 儲存 Feature Graph
         graph.save(proj_dir / "features.json")
 
+        # 質量屬性
+        material = proj.get("manifest", {}).get("material", "pla")
+        volume_mm3 = float(part.volume) if part else 0.0
+        area_mm2 = float(part.area) if part else 0.0
+        bounding_box = part.bounding_box() if part else None
+        from .standard_parts import calculate_mass
+        mass_g = calculate_mass(volume_mm3, material) if volume_mm3 > 0 else 0.0
+
         return {
             "status": "success",
             "feature_count": len(graph.features),
+            "mass_properties": {
+                "volume_mm3": round(volume_mm3, 2),
+                "surface_area_mm2": round(area_mm2, 2),
+                "mass_g": round(mass_g, 2),
+                "material": material,
+                "density_g_cm3": round(mass_g / (volume_mm3 / 1000.0), 4) if volume_mm3 > 0 else 0.0,
+                "bounding_box_mm": {
+                    "min_x": round(bounding_box.min.X, 2) if bounding_box else 0,
+                    "min_y": round(bounding_box.min.Y, 2) if bounding_box else 0,
+                    "min_z": round(bounding_box.min.Z, 2) if bounding_box else 0,
+                    "max_x": round(bounding_box.max.X, 2) if bounding_box else 0,
+                    "max_y": round(bounding_box.max.Y, 2) if bounding_box else 0,
+                    "max_z": round(bounding_box.max.Z, 2) if bounding_box else 0,
+                    "size_x": round(bounding_box.size.X, 2) if bounding_box else 0,
+                    "size_y": round(bounding_box.size.Y, 2) if bounding_box else 0,
+                    "size_z": round(bounding_box.size.Z, 2) if bounding_box else 0,
+                },
+            },
         }
     except ImportError as e:
         raise HTTPException(503, f"CAD 引擎未安裝: {e}")
@@ -555,6 +604,9 @@ def _classify_error(e: Exception) -> str:
     # 標準件查表失敗
     if "螺絲標準" in msg or "配合等級" in msg or "nema" in msg_lower or "未知的 nema" in msg.lower():
         return "INVALID_STANDARD_PART"
+    # 草圖未閉合
+    if "未閉合" in msg or "not closed" in msg_lower or "sketch_not_closed" in msg_lower:
+        return "SKETCH_NOT_CLOSED"
     # 特徵參照不存在
     if "not found" in msg_lower or "不存在" in msg or "找不到" in msg:
         return "FEATURE_REFERENCE_NOT_FOUND"

@@ -21,11 +21,13 @@ public class MainViewModel : INotifyPropertyChanged
     private ICadWorker? _worker;
     private CadWorkerClient? _workerClient;
     private ILlmProvider? _llmProvider;
+    private readonly List<ChatTurn> _chatHistory = new();
 
     private string _inputText = string.Empty;
     private string _llmStatus = "LLM：偵測中…";
     private string _modelInfoText = string.Empty;
     private string _validationText = "驗證報告：尚未執行";
+    private string _massInfoText = string.Empty;
     private string _workerStatus = "Worker：連線中…";
     private string? _projectId;
     private bool _hasModel;
@@ -67,6 +69,12 @@ public class MainViewModel : INotifyPropertyChanged
     {
         get => _validationText;
         set { _validationText = value; OnPropertyChanged(); }
+    }
+
+    public string MassInfoText
+    {
+        get => _massInfoText;
+        set { _massInfoText = value; OnPropertyChanged(); }
     }
 
     public string WorkerStatus
@@ -146,6 +154,7 @@ public class MainViewModel : INotifyPropertyChanged
     public ICommand EditSketchCommand { get; }
     public ICommand DeleteFeatureCommand { get; }
     public ICommand EditParametersCommand { get; }
+    public ICommand ExportChatCommand { get; }
 
     /// <summary>
     /// 當 ViewModel 需要在 3D 視窗中執行 JavaScript 時觸發。
@@ -176,8 +185,9 @@ public class MainViewModel : INotifyPropertyChanged
         RedoCommand = new AsyncRelayCommand(RedoAsync, () => HasProject && IsWorkerConnected);
         NewSketchCommand = new AsyncRelayCommand(NewSketchAsync, () => IsWorkerConnected);
         EditSketchCommand = new AsyncRelayCommand(EditSketchAsync, () => CanEditSketch && IsWorkerConnected);
-        DeleteFeatureCommand = new AsyncRelayCommand(DeleteFeatureAsync, () => _selectedFeature != null && IsWorkerConnected);
-        EditParametersCommand = new RelayCommand(EditParameters, () => _selectedFeature != null);
+        DeleteFeatureCommand = new AsyncRelayCommand(DeleteFeatureAsync, () => _selectedFeature != null && !_selectedFeature.IsDatumPlane && IsWorkerConnected);
+        EditParametersCommand = new RelayCommand(EditParameters, () => _selectedFeature != null && !_selectedFeature.IsDatumPlane);
+        ExportChatCommand = new AsyncRelayCommand(ExportChatAsync, () => Messages.Count > 0);
 
         // 歡迎訊息
         Messages.Add(ChatMessage.Assistant(
@@ -323,9 +333,11 @@ public class MainViewModel : INotifyPropertyChanged
             IsBusy = true;
             _projectId = await _worker.CreateProjectAsync("新專案");
             FeatureTree.Clear();
+            ClearHistory();
             HasModel = false;
             ModelInfoText = "";
             ValidationText = "驗證報告：尚未執行";
+            MassInfoText = "";
             ViewerScriptRequested?.Invoke("clearHighlight();");
             Messages.Add(ChatMessage.Assistant("已建立新專案。"));
             RefreshCanExecute();
@@ -352,6 +364,7 @@ public class MainViewModel : INotifyPropertyChanged
             // 先確認專案存在
             await _worker.GetProjectAsync(projectId);
             _projectId = projectId;
+            ClearHistory();
             RefreshCanExecute();
             Messages.Add(ChatMessage.Assistant($"已開啟專案 {projectId}，重建中…"));
             await RebuildAsync();
@@ -428,6 +441,7 @@ public class MainViewModel : INotifyPropertyChanged
             // 建立新專案
             _projectId = await _worker.CreateProjectAsync(exampleName);
             FeatureTree.Clear();
+            ClearHistory();
 
             // 逐特徵發送 create_feature 命令
             var features = data.RootElement.GetProperty("features");
@@ -476,7 +490,15 @@ public class MainViewModel : INotifyPropertyChanged
             ViewerScriptRequested?.Invoke("clearHighlight();");
 
             var rebuild = await _worker.RebuildAsync(_projectId);
-            if (rebuild.Status == "error")
+
+            // Repair loop — if rebuild fails with structured error, ask LLM for a fix
+            // Worker 失敗時回傳 status="failed"（結構化錯誤），一律以非 "success" 判定失敗
+            if (rebuild.Status != "success" && _llmProvider != null)
+            {
+                rebuild = await TryRepairAsync(rebuild);
+            }
+
+            if (rebuild.Status != "success")
             {
                 Log.Error("重建失敗：{Code} {Msg}", rebuild.ErrorCode, rebuild.EngineMessage);
                 Messages.Add(ChatMessage.Error(
@@ -521,6 +543,20 @@ public class MainViewModel : INotifyPropertyChanged
             ModelInfoText = report != null
                 ? $"尺寸 {report.SizeX:F0}×{report.SizeY:F0}×{report.SizeZ:F0} mm　體積 {report.Volume:F0} mm³　孔數 {report.HoleCount}"
                 : "模型已重建";
+
+            // 質量屬性
+            if (rebuild.MassProperties != null)
+            {
+                var mp = rebuild.MassProperties;
+                var bb = mp.BoundingBoxMm;
+                MassInfoText = $"材質 {mp.Material}　密度 {mp.DensityGcm3:F2} g/cm³　" +
+                    $"質量 {mp.MassG:F2} g　體積 {mp.VolumeMm3:F0} mm³　表面積 {mp.SurfaceAreaMm2:F0} mm²" +
+                    (bb != null ? $"\n邊界框 {bb.SizeX:F1}×{bb.SizeY:F1}×{bb.SizeZ:F1} mm" : "");
+            }
+            else
+            {
+                MassInfoText = string.Empty;
+            }
         }
         catch (Exception ex)
         {
@@ -528,6 +564,64 @@ public class MainViewModel : INotifyPropertyChanged
             Messages.Add(ChatMessage.Error($"重建失敗：{ex.Message}"));
         }
         finally { IsBusy = false; }
+    }
+
+    /// <summary>
+    /// Repair Agent 迴圈——當重建失敗時，將錯誤碼餵給 LLM 產生修正命令，最多重試 3 次。
+    /// </summary>
+    private async Task<RebuildResult> TryRepairAsync(RebuildResult failedRebuild)
+    {
+        const int maxRetries = 3;
+        var rebuild = failedRebuild;
+
+        for (int attempt = 1; attempt <= maxRetries; attempt++)
+        {
+            if (string.IsNullOrEmpty(rebuild.ErrorCode))
+                break;
+
+            Log.Information("Repair Agent 第 {Attempt} 次嘗試：{Code} {Msg}",
+                attempt, rebuild.ErrorCode, rebuild.EngineMessage);
+            Messages.Add(ChatMessage.Assistant(
+                $"🔧 修正嘗試 {attempt}/{maxRetries}：{rebuild.ErrorCode} — {rebuild.EngineMessage}"));
+
+            try
+            {
+                // 取得目前特徵圖給 LLM
+                var graphJson = await _worker!.GetProjectAsync(_projectId!);
+
+                // 要求 LLM 產生修正命令
+                var repairCmd = await _llmProvider!.RepairCommandAsync(
+                    rebuild.ErrorCode!, rebuild.EngineMessage ?? "", graphJson);
+
+                Messages.Add(ChatMessage.Assistant(
+                    $"修正方案：{repairCmd.Action}" +
+                    (repairCmd.TargetFeatureId != null ? $" → {repairCmd.TargetFeatureId}" : "")));
+
+                // 套用修正命令
+                var cmdResult = await _worker.ApplyCommandAsync(_projectId!, repairCmd);
+                if (cmdResult.Status == "error")
+                {
+                    Log.Warning("修正命令失敗：{Msg}", cmdResult.EngineMessage);
+                    continue;
+                }
+
+                // 重新重建
+                rebuild = await _worker.RebuildAsync(_projectId!);
+                if (rebuild.Status == "success")
+                {
+                    Messages.Add(ChatMessage.Assistant($"✓ 修正成功（第 {attempt} 次嘗試）"));
+                    return rebuild;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "Repair Agent 第 {Attempt} 次嘗試失敗", attempt);
+            }
+        }
+
+        // 超過最大重試次數——回傳最後一次失敗結果
+        Messages.Add(ChatMessage.Error($"修正失敗——已嘗試 {maxRetries} 次"));
+        return rebuild;
     }
 
     private async Task ExportAsync(string? format)
@@ -546,12 +640,185 @@ public class MainViewModel : INotifyPropertyChanged
         finally { IsBusy = false; }
     }
 
+    /// <summary>
+    /// 匯出對話歷史為 Markdown + JSON，方便分析 LLM 意圖判斷效果。
+    /// 匯出內容包含：每則訊息的種類、文字、計畫步驟、修改差異，
+    /// 以及內部 LLM 對話歷史 (_chatHistory)。
+    /// </summary>
+    private async Task ExportChatAsync()
+    {
+        try
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine("# OpenCad 對話匯出");
+            sb.AppendLine();
+            sb.AppendLine($"- 匯出時間：{DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+            sb.AppendLine($"- 專案 ID：{_projectId ?? "（無）"}");
+            sb.AppendLine($"- 訊息數量：{Messages.Count}");
+            sb.AppendLine();
+
+            // ── 一、UI 訊息完整紀錄 ──
+            sb.AppendLine("---");
+            sb.AppendLine("## 一、UI 對話紀錄");
+            sb.AppendLine();
+            for (int i = 0; i < Messages.Count; i++)
+            {
+                var msg = Messages[i];
+                var kindLabel = msg.Kind switch
+                {
+                    MessageKind.User => "👤 使用者",
+                    MessageKind.Assistant => "🤖 助手",
+                    MessageKind.Error => "❌ 錯誤",
+                    MessageKind.Plan => "📋 計畫",
+                    MessageKind.Diff => "📝 修改差異",
+                    _ => msg.Kind.ToString(),
+                };
+                sb.AppendLine($"### [{i + 1}] {kindLabel}");
+                sb.AppendLine();
+                if (!string.IsNullOrEmpty(msg.Text))
+                {
+                    sb.AppendLine(msg.Text);
+                    sb.AppendLine();
+                }
+
+                if (msg.Plan != null)
+                {
+                    sb.AppendLine("**計畫步驟：**");
+                    if (msg.Plan.Steps != null && msg.Plan.Steps.Count > 0)
+                    {
+                        for (int s = 0; s < msg.Plan.Steps.Count; s++)
+                            sb.AppendLine($"{s + 1}. {msg.Plan.Steps[s].Description}");
+                    }
+                    else
+                    {
+                        sb.AppendLine("（無步驟）");
+                    }
+                    sb.AppendLine();
+                    if (msg.Plan.MissingInfo != null && msg.Plan.MissingInfo.Count > 0)
+                    {
+                        sb.AppendLine("**缺少資訊：**");
+                        foreach (var mi in msg.Plan.MissingInfo)
+                            sb.AppendLine($"- {mi}");
+                        sb.AppendLine();
+                    }
+                }
+
+                if (msg.Diff != null)
+                {
+                    sb.AppendLine($"**目標特徵：** {msg.Diff.FeatureId}");
+                    sb.AppendLine();
+                    if (msg.Diff.Before != null && msg.Diff.Before.Count > 0)
+                    {
+                        sb.AppendLine("**修改前：**");
+                        foreach (var kv in msg.Diff.Before)
+                            sb.AppendLine($"- `{kv.Key}` = {kv.Value}");
+                        sb.AppendLine();
+                    }
+                    if (msg.Diff.After != null && msg.Diff.After.Count > 0)
+                    {
+                        sb.AppendLine("**修改後：**");
+                        foreach (var kv in msg.Diff.After)
+                            sb.AppendLine($"- `{kv.Key}` = {kv.Value}");
+                        sb.AppendLine();
+                    }
+                }
+            }
+
+            // ── 二、LLM 內部歷史 ──
+            sb.AppendLine("---");
+            sb.AppendLine("## 二、LLM 內部對話歷史（送給 LLM 的 context）");
+            sb.AppendLine();
+            sb.AppendLine("| # | Role | Content |");
+            sb.AppendLine("|---|------|---------|");
+            for (int i = 0; i < _chatHistory.Count; i++)
+            {
+                var turn = _chatHistory[i];
+                var content = turn.Content.Replace("|", "\\|").Replace("\n", " ");
+                if (content.Length > 200)
+                    content = content[..200] + "…";
+                sb.AppendLine($"| {i + 1} | {turn.Role} | {content} |");
+            }
+            sb.AppendLine();
+
+            // ── 三、Feature Tree 快照 ──
+            sb.AppendLine("---");
+            sb.AppendLine("## 三、特徵樹快照");
+            sb.AppendLine();
+            void DumpTree(IEnumerable<FeatureNode> nodes, int indent)
+            {
+                foreach (var n in nodes)
+                {
+                    var prefix = new string(' ', indent * 2);
+                    sb.AppendLine($"{prefix}- {n.TypeIcon} {n.DisplayName} (`{n.FeatureId}`, type={n.FeatureType})");
+                    DumpTree(n.Children, indent + 1);
+                }
+            }
+            DumpTree(FeatureTree, 0);
+            sb.AppendLine();
+
+            // ── JSON 格式（方便程式化分析） ──
+            sb.AppendLine("---");
+            sb.AppendLine("## 四、JSON 格式");
+            sb.AppendLine();
+            sb.AppendLine("```json");
+            var jsonPayload = new
+            {
+                exported_at = DateTime.Now.ToString("o"),
+                project_id = _projectId,
+                messages = Messages.Select((m, i) => new
+                {
+                    index = i,
+                    kind = m.Kind.ToString(),
+                    text = m.Text,
+                    plan = m.Plan != null ? new
+                    {
+                        summary = m.Plan.Summary,
+                        steps = m.Plan.Steps?.Select(s => s.Description).ToList(),
+                        missing_info = m.Plan.MissingInfo?.ToList(),
+                    } : null,
+                    diff = m.Diff != null ? new
+                    {
+                        feature_id = m.Diff.FeatureId,
+                        description = m.Diff.Description,
+                        before = m.Diff.Before,
+                        after = m.Diff.After,
+                    } : null,
+                }).ToList(),
+                llm_history = _chatHistory.Select(t => new { role = t.Role, content = t.Content }).ToList(),
+                feature_tree = FeatureTree.Select(n => new
+                {
+                    id = n.FeatureId,
+                    name = n.DisplayName,
+                    type = n.FeatureType,
+                    parameters = n.Parameters.ToDictionary(p => p.Key, p => p.Value),
+                    children = n.Children,
+                }).ToList(),
+            };
+            sb.AppendLine(System.Text.Json.JsonSerializer.Serialize(jsonPayload,
+                new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+            sb.AppendLine("```");
+
+            // 寫入檔案到桌面
+            var fileName = $"opencad-chat-{DateTime.Now:yyyyMMdd-HHmmss}.md";
+            var desktopPath = Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
+            var fullPath = Path.Combine(desktopPath, fileName);
+            await File.WriteAllTextAsync(fullPath, sb.ToString());
+
+            Messages.Add(ChatMessage.Assistant($"已匯出對話紀錄：{fullPath}"));
+        }
+        catch (Exception ex)
+        {
+            Messages.Add(ChatMessage.Error($"匯出對話失敗：{ex.Message}"));
+        }
+    }
+
     private async Task SendAsync()
     {
         if (string.IsNullOrWhiteSpace(InputText)) return;
 
         var request = InputText;
         Messages.Add(ChatMessage.User(request));
+        AddHistory("user", request);
         InputText = string.Empty;
 
         // 輸入為專案 ID（GUID）時直接開啟該專案——配合「開啟專案」清單的操作方式
@@ -560,6 +827,10 @@ public class MainViewModel : INotifyPropertyChanged
             await OpenProjectByIdAsync(request.Trim());
             return;
         }
+
+        // ── 本地意圖攔截：復原/重做/刪除/視角 等操作直接執行，不送 LLM ──
+        if (TryHandleLocalIntent(request))
+            return;
 
         if (_llmProvider == null)
         {
@@ -580,7 +851,8 @@ public class MainViewModel : INotifyPropertyChanged
             }
 
             // 分支：已有特徵 → 語意修改流程（A1），否則 → 計畫建立流程
-            if (FeatureTree.Count > 0 && _worker != null && _projectId != null)
+            // 注意：FeatureTree 內含常駐的基準面/原點節點，須排除才能正確判斷「是否有真實特徵」
+            if (FeatureTree.Any(n => !n.IsDatumPlane) && _worker != null && _projectId != null)
             {
                 await SendUpdateAsync(request);
             }
@@ -590,9 +862,11 @@ public class MainViewModel : INotifyPropertyChanged
                 {
                     UserRequest = request,
                     CurrentProjectId = _projectId,
+                    History = new List<ChatTurn>(_chatHistory),
                 };
 
                 var plan = await _llmProvider.CreatePlanAsync(context);
+                AddHistory("assistant", $"[計畫] {plan.Summary}");
 
                 // 顯示計畫卡片
                 // 一次性卡片：套用/取消後停用按鈕，防止重複執行
@@ -601,12 +875,14 @@ public class MainViewModel : INotifyPropertyChanged
                 {
                     if (!planMsg.IsActionable) return;
                     planMsg.IsActionable = false;
+                    AddHistory("user", "[套用計畫]");
                     _ = ApplyPlanAsync(plan);
                 });
                 planMsg.CancelPlanCommand = new RelayCommand(() =>
                 {
                     if (!planMsg.IsActionable) return;
                     planMsg.IsActionable = false;
+                    AddHistory("user", "[取消計畫]");
                     Messages.Add(ChatMessage.Assistant("已取消建模計畫。"));
                 });
                 Messages.Add(planMsg);
@@ -624,6 +900,78 @@ public class MainViewModel : INotifyPropertyChanged
             Messages.Add(ChatMessage.Error($"LLM 處理失敗：{ex.Message}"));
         }
         finally { IsBusy = false; }
+    }
+
+    // ── 本地意圖攔截 ──
+    // 使用者輸入「復原」「重做」「刪除XX」「視角」等操作時，直接執行對應 UI 命令，
+    // 不送 LLM——這些操作有確定性的 UI 對應，LLM 只會增加延遲和誤判。
+    private bool TryHandleLocalIntent(string request)
+    {
+        var trimmed = request.Trim();
+
+        // 復原 / 撤銷
+        if (IntentMatcher.IsUndo(trimmed))
+        {
+            if (HasProject && IsWorkerConnected)
+            {
+                _ = UndoAsync();
+            }
+            else
+            {
+                Messages.Add(ChatMessage.Assistant("目前沒有開啟的專案，無法復原。"));
+            }
+            return true;
+        }
+
+        // 重做 / 取消復原
+        if (IntentMatcher.IsRedo(trimmed))
+        {
+            if (HasProject && IsWorkerConnected)
+            {
+                _ = RedoAsync();
+            }
+            else
+            {
+                Messages.Add(ChatMessage.Assistant("目前沒有開啟的專案，無法重做。"));
+            }
+            return true;
+        }
+
+        // 視角操作
+        var viewKeyword = IntentMatcher.MatchView(trimmed);
+        if (viewKeyword != null)
+        {
+            SetView(viewKeyword);
+            return true;
+        }
+
+        // 縮放至適合
+        if (IntentMatcher.IsZoomToFit(trimmed))
+        {
+            ViewerScriptRequested?.Invoke("zoomFit()");
+            Messages.Add(ChatMessage.Assistant("已縮放至適合。"));
+            return true;
+        }
+
+        // 基準面顯示/隱藏
+        if (IntentMatcher.IsDatumPlaneToggle(trimmed))
+        {
+            ViewerScriptRequested?.Invoke("onToggleDatumPlanes()");
+            Messages.Add(ChatMessage.Assistant("已切換基準面顯示。"));
+            return true;
+        }
+
+        // 重建
+        if (IntentMatcher.IsRebuild(trimmed))
+        {
+            if (HasProject && IsWorkerConnected)
+            {
+                _ = RebuildAsync();
+            }
+            return true;
+        }
+
+        return false;
     }
 
     private async Task ApplyPlanAsync(DesignPlan plan)
@@ -650,6 +998,45 @@ public class MainViewModel : INotifyPropertyChanged
                     continue;
                 }
 
+                // LLM 可能輸出 {"type":"XY"} 或 {"base":"XY"}——統一正規化為 base 格式
+                var plane = NormalizePlane(step.Plane);
+
+                // pad/revolve 沒有前置草圖時：若步驟自帶 sketch_entities，
+                // 確定性拆出草圖特徵；否則計畫不完整，中止並回報（避免建出必然重建失敗的特徵）
+                if (featType is FeatureType.Pad or FeatureType.Revolve && lastSketchId == null)
+                {
+                    if (step.SketchEntities is { Count: > 0 })
+                    {
+                        var autoSketchId = $"sketch_{index}_auto";
+                        var sketchResult = await _worker.ApplyCommandAsync(_projectId, new CadCommand
+                        {
+                            Action = "create_feature",
+                            Feature = new Feature
+                            {
+                                FeatureId = autoSketchId,
+                                Type = FeatureType.Sketch,
+                                Name = $"草圖（自步驟 {index} 拆出）",
+                                Parameters = new(),
+                                SketchEntities = step.SketchEntities,
+                                Plane = plane,
+                            },
+                        });
+                        if (sketchResult.Status == "error")
+                        {
+                            Messages.Add(ChatMessage.Error(
+                                $"特徵 {autoSketchId} 建立失敗：{sketchResult.ErrorCode} — {sketchResult.EngineMessage}"));
+                            return;
+                        }
+                        lastSketchId = autoSketchId;
+                    }
+                    else
+                    {
+                        Messages.Add(ChatMessage.Error(
+                            $"計畫第 {index} 步（{step.FeatureType}）缺少輸入草圖，計畫不完整——請重新描述需求以產生含草圖步驟的計畫。"));
+                        return;
+                    }
+                }
+
                 var featureId = $"{step.FeatureType}_{index}";
                 var input = featType switch
                 {
@@ -657,6 +1044,12 @@ public class MainViewModel : INotifyPropertyChanged
                     FeatureType.Pad or FeatureType.Revolve => lastSketchId,
                     _ => lastFeatureId,
                 };
+
+                // pocket 是雙輸入特徵：input=基礎實體、references=挖孔輪廓草圖
+                //（_build_pocket 從 references 找 sketch——放 input 進去會靜默不挖）
+                var references = featType == FeatureType.Pocket && lastSketchId != null
+                    ? new List<string> { lastSketchId }
+                    : input != null ? new List<string> { input } : new();
 
                 var command = new CadCommand
                 {
@@ -667,8 +1060,12 @@ public class MainViewModel : INotifyPropertyChanged
                         Type = featType,
                         Name = step.Description,
                         Input = input,
-                        References = input != null ? new List<string> { input } : new(),
+                        References = references,
                         Parameters = step.Parameters,
+                        // 只有 sketch 特徵保留 sketch_entities；pad/revolve 的實體已拆至草圖
+                        SketchEntities = featType == FeatureType.Sketch ? step.SketchEntities ?? new() : new(),
+                        StandardParts = step.StandardParts ?? new(),
+                        Plane = plane,
                     },
                 };
 
@@ -697,7 +1094,30 @@ public class MainViewModel : INotifyPropertyChanged
     }
 
     /// <summary>
-    /// 語意修改流程（A1）：取得特徵圖 → LLM 產生 update 命令 → 顯示差異卡片（A2）→ 使用者確認後套用。
+    /// 將 LLM 計畫的 plane 正規化為引擎契約格式 {"base": "XY|XZ|YZ", "offset": n}。
+    /// 容忍 LLM 以 "type" 為鍵或小寫平面名。
+    /// </summary>
+    private static Dictionary<string, object> NormalizePlane(Dictionary<string, object>? plane)
+    {
+        var result = new Dictionary<string, object> { ["base"] = "XY", ["offset"] = 0 };
+        if (plane == null) return result;
+
+        object? baseVal = null;
+        if (plane.TryGetValue("base", out var b)) baseVal = b;
+        else if (plane.TryGetValue("type", out var t)) baseVal = t;
+
+        var baseStr = baseVal?.ToString()?.Trim().ToUpperInvariant();
+        if (baseStr is "XY" or "XZ" or "YZ")
+            result["base"] = baseStr;
+
+        if (plane.TryGetValue("offset", out var offset) && offset != null)
+            result["offset"] = offset;
+
+        return result;
+    }
+
+    /// <summary>
+    /// 語意修改流程（A1）：取得特徵圖 → LLM 產生命令 → 顯示差異卡片（A2）→ 使用者確認後套用。
     /// </summary>
     private async Task SendUpdateAsync(string userRequest)
     {
@@ -708,37 +1128,124 @@ public class MainViewModel : INotifyPropertyChanged
             // 取得目前特徵圖 JSON
             var featureGraphJson = await _worker.GetProjectAsync(_projectId);
 
-            // LLM 產生 update 命令
-            var command = await _llmProvider.CreateUpdateCommandAsync(userRequest, featureGraphJson);
+            // LLM 產生命令（update/create/delete/set_material/rebuild）
+            var command = await _llmProvider.CreateUpdateCommandAsync(userRequest, featureGraphJson, new List<ChatTurn>(_chatHistory));
 
-            if (string.IsNullOrEmpty(command.TargetFeatureId))
+            var isCreate = command.Action == "create_feature" && command.Feature != null;
+            var isDelete = command.Action == "delete_feature";
+            var isSetMaterial = command.Action == "set_material";
+            var isRebuild = command.Action == "rebuild";
+
+            // rebuild：LLM 對不支援功能的回應——直接重建，顯示 reasoning
+            if (isRebuild)
             {
-                Messages.Add(ChatMessage.Assistant("無法判斷要修改的特徵，請更具體描述。"));
+                Messages.Add(ChatMessage.Assistant(command.Reasoning ?? "已重建模型。"));
+                AddHistory("assistant", command.Reasoning ?? "已重建模型。");
+                await RebuildAsync();
                 return;
             }
 
-            // 取得修改前的特徵資料（用於 diff）
-            var beforeParams = ExtractFeatureParams(featureGraphJson, command.TargetFeatureId);
-
-            // 建構修改後的參數預覽（parameters 與 standard_parts 都要反映）
-            var afterParams = new Dictionary<string, object>(beforeParams);
-            if (command.Parameters != null)
+            // set_material：直接套用，不需 diff 卡片
+            if (isSetMaterial)
             {
-                foreach (var kvp in command.Parameters)
-                    afterParams[kvp.Key] = kvp.Value;
-            }
-            if (command.StandardParts != null && command.StandardParts.Count > 0)
-            {
-                afterParams["standard_parts"] = JsonSerializer.Serialize(command.StandardParts);
+                var matName = command.Parameters?.GetValueOrDefault("material")?.ToString() ?? "";
+                AddHistory("assistant", $"[材質] {matName}: {command.Reasoning}");
+                Messages.Add(ChatMessage.Assistant($"已變更材質為 {matName}，開始重建…"));
+                await ApplyDiffAsync(command);
+                return;
             }
 
-            var diff = new ModificationDiff
+            // delete_feature：需要 target_feature_id
+            if (isDelete && string.IsNullOrEmpty(command.TargetFeatureId))
             {
-                FeatureId = command.TargetFeatureId,
-                Before = beforeParams,
-                After = afterParams,
-                Description = command.Reasoning,
-            };
+                Messages.Add(ChatMessage.Assistant("無法判斷要刪除的特徵，請更具體描述。"));
+                AddHistory("assistant", "無法判斷要刪除的特徵。");
+                return;
+            }
+
+            // update_feature：需要 target_feature_id
+            if (!isCreate && !isDelete && string.IsNullOrEmpty(command.TargetFeatureId))
+            {
+                Messages.Add(ChatMessage.Assistant("無法判斷要修改的特徵，請更具體描述。"));
+                AddHistory("assistant", "無法判斷要修改的特徵。");
+                return;
+            }
+
+            // ── 建構差異卡片 ──
+            ModificationDiff diff;
+            string historyTarget;
+
+            if (isCreate)
+            {
+                var feat = command.Feature!;
+                // 防呆：LLM 沒給 ID 或 ID 撞名時自動改名
+                if (string.IsNullOrEmpty(feat.FeatureId))
+                    feat.FeatureId = $"{feat.Type}_{DateTime.UtcNow.Ticks % 10000}";
+                while (ExtractFeatureParams(featureGraphJson, feat.FeatureId).Count > 0)
+                    feat.FeatureId += "_n";
+                historyTarget = feat.FeatureId;
+                AddHistory("assistant", $"[新增] {feat.FeatureId} ({feat.Type}): {command.Reasoning}");
+
+                // 新增特徵的差異卡片：Before 空、After 為新特徵的參數
+                var afterCreate = new Dictionary<string, object>
+                {
+                    ["type"] = feat.Type.ToString().ToLowerInvariant(),
+                    ["input"] = feat.Input ?? "",
+                };
+                foreach (var kvp in feat.Parameters)
+                    afterCreate[kvp.Key] = kvp.Value;
+
+                diff = new ModificationDiff
+                {
+                    FeatureId = feat.FeatureId,
+                    Before = new(),
+                    After = afterCreate,
+                    Description = command.Reasoning,
+                };
+            }
+            else if (isDelete)
+            {
+                historyTarget = command.TargetFeatureId!;
+                AddHistory("assistant", $"[刪除] {command.TargetFeatureId}: {command.Reasoning}");
+
+                var delBeforeParams = ExtractFeatureParams(featureGraphJson, command.TargetFeatureId!);
+                diff = new ModificationDiff
+                {
+                    FeatureId = command.TargetFeatureId!,
+                    Before = delBeforeParams,
+                    After = new() { ["_deleted"] = true },
+                    Description = command.Reasoning ?? "刪除特徵",
+                };
+            }
+            else
+            {
+                // update_feature
+                historyTarget = command.TargetFeatureId!;
+                AddHistory("assistant", $"[修改] {command.TargetFeatureId} ({command.Action}): {command.Reasoning}");
+
+                // 取得修改前的特徵資料（用於 diff）
+                var beforeParams = ExtractFeatureParams(featureGraphJson, command.TargetFeatureId!);
+
+                // 建構修改後的參數預覽（parameters 與 standard_parts 都要反映）
+                var afterParams = new Dictionary<string, object>(beforeParams);
+                if (command.Parameters != null)
+                {
+                    foreach (var kvp in command.Parameters)
+                        afterParams[kvp.Key] = kvp.Value;
+                }
+                if (command.StandardParts != null && command.StandardParts.Count > 0)
+                {
+                    afterParams["standard_parts"] = JsonSerializer.Serialize(command.StandardParts);
+                }
+
+                diff = new ModificationDiff
+                {
+                    FeatureId = command.TargetFeatureId!,
+                    Before = beforeParams,
+                    After = afterParams,
+                    Description = command.Reasoning,
+                };
+            }
 
             // 顯示差異卡片（A2）
             // 一次性卡片：套用/取消後停用按鈕，防止重複執行
@@ -747,12 +1254,14 @@ public class MainViewModel : INotifyPropertyChanged
             {
                 if (!diffMsg.IsActionable) return;
                 diffMsg.IsActionable = false;
+                AddHistory("user", $"[套用修改] {historyTarget}");
                 _ = ApplyDiffAsync(command);
             });
             diffMsg.CancelDiffCommand = new RelayCommand(() =>
             {
                 if (!diffMsg.IsActionable) return;
                 diffMsg.IsActionable = false;
+                AddHistory("user", "[取消修改]");
                 Messages.Add(ChatMessage.Assistant("已取消修改。"));
             });
             Messages.Add(diffMsg);
@@ -861,8 +1370,21 @@ public class MainViewModel : INotifyPropertyChanged
                 RefreshCanExecute();
             }
 
-            // 產生 sketch_N ID
-            var sketchId = $"sketch_{FeatureTree.Count + 1}";
+            // 決定草圖基準面——若選取的是基準面節點，使用該面；否則預設 XY
+            string planeBase = "XY";
+            if (_selectedFeature != null && _selectedFeature.IsDatumPlane && _selectedFeature.PlaneBase != null)
+                planeBase = _selectedFeature.PlaneBase;
+
+            // 產生 sketch_N ID：取現存草圖編號最大值 +1，避免刪除後重號
+            int sketchNum = 1;
+            foreach (var node in FeatureTree)
+            {
+                if (node.IsDatumPlane || node.FeatureType != "sketch") continue;
+                var m = System.Text.RegularExpressions.Regex.Match(node.FeatureId, @"^sketch_(\d+)$");
+                if (m.Success && int.TryParse(m.Groups[1].Value, out var n) && n >= sketchNum)
+                    sketchNum = n + 1;
+            }
+            var sketchId = $"sketch_{sketchNum}";
             var command = new CadCommand
             {
                 Action = "create_feature",
@@ -870,9 +1392,10 @@ public class MainViewModel : INotifyPropertyChanged
                 {
                     FeatureId = sketchId,
                     Type = FeatureType.Sketch,
-                    Name = $"草圖 {FeatureTree.Count + 1}",
+                    Name = $"草圖 {sketchNum}",
                     Parameters = new(),
                     SketchEntities = new(),
+                    Plane = new() { ["base"] = planeBase, ["offset"] = 0 },
                 },
             };
 
@@ -884,10 +1407,11 @@ public class MainViewModel : INotifyPropertyChanged
             }
 
             await UpdateFeatureTreeAsync();
-            Messages.Add(ChatMessage.Assistant($"已建立空草圖「{sketchId}」，進入編輯模式…"));
+            Messages.Add(ChatMessage.Assistant($"已建立空草圖「{sketchId}」（基準面 {planeBase}），進入編輯模式…"));
 
-            // 進入草圖編輯模式
-            EnterSketchEditor(sketchId, "[]");
+            // 進入草圖編輯模式；viewer.html 的 enterSketchMode 接收 { "base": "XY", "offset": 0 }
+            var planeJson = JsonSerializer.Serialize(command.Feature.Plane);
+            EnterSketchEditor(sketchId, "[]", planeJson);
         }
         catch (Exception ex)
         {
@@ -906,10 +1430,11 @@ public class MainViewModel : INotifyPropertyChanged
         {
             IsBusy = true;
 
-            // 從 Worker 取得特徵圖，取出 sketch_entities
+            // 從 Worker 取得特徵圖，取出 sketch_entities 和 plane
             var rawJson = await _worker.GetProjectAsync(_projectId);
             var projectInfo = JsonSerializer.Deserialize<JsonElement>(rawJson);
             string entitiesJson = "[]";
+            string planeJson = "{\"base\":\"XY\",\"offset\":0}";
 
             if (projectInfo.TryGetProperty("features", out var featuresEl))
             {
@@ -932,14 +1457,16 @@ public class MainViewModel : INotifyPropertyChanged
                         targetFeat = f;
                 }
 
-                if (targetFeat.HasValue &&
-                    targetFeat.Value.TryGetProperty("sketch_entities", out var seEl))
+                if (targetFeat.HasValue)
                 {
-                    entitiesJson = seEl.GetRawText();
+                    if (targetFeat.Value.TryGetProperty("sketch_entities", out var seEl))
+                        entitiesJson = seEl.GetRawText();
+                    if (targetFeat.Value.TryGetProperty("plane", out var planeEl))
+                        planeJson = planeEl.GetRawText();
                 }
             }
 
-            EnterSketchEditor(_selectedFeature.FeatureId, entitiesJson);
+            EnterSketchEditor(_selectedFeature.FeatureId, entitiesJson, planeJson);
         }
         catch (Exception ex)
         {
@@ -951,9 +1478,9 @@ public class MainViewModel : INotifyPropertyChanged
     /// <summary>
     /// 送出 enterSketchMode JS 進入草圖編輯器。
     /// </summary>
-    private void EnterSketchEditor(string featureId, string entitiesJson)
+    private void EnterSketchEditor(string featureId, string entitiesJson, string? planeJson = null)
     {
-        ViewerScriptRequested?.Invoke(ViewerBridge.BuildEnterSketchScript(featureId, entitiesJson));
+        ViewerScriptRequested?.Invoke(ViewerBridge.BuildEnterSketchScript(featureId, entitiesJson, planeJson));
     }
 
     /// <summary>
@@ -1006,7 +1533,7 @@ public class MainViewModel : INotifyPropertyChanged
     /// </summary>
     private async Task DeleteFeatureAsync()
     {
-        if (_selectedFeature == null || _worker == null || _projectId == null) return;
+        if (_selectedFeature == null || _selectedFeature.IsDatumPlane || _worker == null || _projectId == null) return;
 
         var featureId = _selectedFeature.FeatureId;
         IsBusy = true;
@@ -1047,6 +1574,7 @@ public class MainViewModel : INotifyPropertyChanged
     /// </summary>
     private void EditParameters()
     {
+        if (_selectedFeature == null || _selectedFeature.IsDatumPlane) return;
         // 參數面板已在左下方顯示，選取特徵時自動更新；
         // 此命令確保右鍵「編輯參數」時面板可見。
         OnPropertyChanged(nameof(SelectedFeatureParameters));
@@ -1115,6 +1643,39 @@ public class MainViewModel : INotifyPropertyChanged
             var projectInfo = JsonSerializer.Deserialize<JsonElement>(rawJson);
             FeatureTree.Clear();
 
+            // 基準面節點（SolidWorks 慣例——常駐特徵樹頂端，非特徵）
+            FeatureTree.Add(new FeatureNode
+            {
+                FeatureId = "__plane_xy",
+                DisplayName = "上基準面 (XY)",
+                FeatureType = "datum_plane",
+                IsDatumPlane = true,
+                PlaneBase = "XY",
+            });
+            FeatureTree.Add(new FeatureNode
+            {
+                FeatureId = "__plane_xz",
+                DisplayName = "前基準面 (XZ)",
+                FeatureType = "datum_plane",
+                IsDatumPlane = true,
+                PlaneBase = "XZ",
+            });
+            FeatureTree.Add(new FeatureNode
+            {
+                FeatureId = "__plane_yz",
+                DisplayName = "右基準面 (YZ)",
+                FeatureType = "datum_plane",
+                IsDatumPlane = true,
+                PlaneBase = "YZ",
+            });
+            FeatureTree.Add(new FeatureNode
+            {
+                FeatureId = "__origin",
+                DisplayName = "原點",
+                FeatureType = "origin",
+                IsDatumPlane = true,
+            });
+
             if (projectInfo.TryGetProperty("features", out var featuresEl))
             {
                 // 新版 graph 格式為 {schema_version, features: [...]}——先解開包裝
@@ -1154,10 +1715,22 @@ public class MainViewModel : INotifyPropertyChanged
             var name = featEl.TryGetProperty("name", out var nEl) ? nEl.GetString() ?? fid : fid;
             var type = featEl.TryGetProperty("type", out var tEl) ? tEl.GetString() ?? "" : "";
 
+            // 若草圖有指定基準面，在顯示名稱後加 @XY/@XZ/@YZ
+            string planeSuffix = "";
+            if (type == "sketch" && featEl.TryGetProperty("plane", out var planeEl))
+            {
+                if (planeEl.TryGetProperty("base", out var baseEl))
+                {
+                    var baseStr = baseEl.GetString();
+                    if (!string.IsNullOrEmpty(baseStr))
+                        planeSuffix = $"@{baseStr}";
+                }
+            }
+
             var node = new FeatureNode
             {
                 FeatureId = fid,
-                DisplayName = $"{name} ({type})",
+                DisplayName = $"{name} ({type}{planeSuffix})",
                 FeatureType = type,
             };
 
@@ -1188,6 +1761,8 @@ public class MainViewModel : INotifyPropertyChanged
             if (featEl.TryGetProperty("standard_parts", out var spEl) &&
                 spEl.ValueKind == JsonValueKind.Object && spEl.EnumerateObject().Any())
                 node.Parameters.Add(ReadOnlyItem("standard_parts", FormatJsonValue(spEl)));
+            if (featEl.TryGetProperty("plane", out var planeEl2) && planeEl2.ValueKind == JsonValueKind.Object)
+                node.Parameters.Add(ReadOnlyItem("plane", FormatJsonValue(planeEl2)));
 
             return node;
         }
@@ -1205,13 +1780,27 @@ public class MainViewModel : INotifyPropertyChanged
     private void UpdateParameterPanel()
     {
         SelectedFeatureParameters.Clear();
-        if (_selectedFeature == null)
+        if (_selectedFeature == null || _selectedFeature.IsDatumPlane)
         {
             CanEditSketch = false;
+            ((AsyncRelayCommand)DeleteFeatureCommand).RaiseCanExecuteChanged();
+            ((RelayCommand)EditParametersCommand).RaiseCanExecuteChanged();
+
+            if (_selectedFeature != null && _selectedFeature.IsDatumPlane)
+            {
+                ViewerScriptRequested?.Invoke($"highlightDatumPlane('{_selectedFeature.FeatureId}');");
+            }
+            else
+            {
+                ViewerScriptRequested?.Invoke("highlightDatumPlane(null);");
+            }
             return;
         }
 
         var featureId = _selectedFeature.FeatureId;
+        // 清除基準面高亮
+        ViewerScriptRequested?.Invoke("highlightDatumPlane(null);");
+        
         foreach (var p in _selectedFeature.Parameters)
         {
             if (p.IsEditable)
@@ -1299,6 +1888,37 @@ public class MainViewModel : INotifyPropertyChanged
         return null;
     }
 
+    private void AddHistory(string role, string content)
+    {
+        if (string.IsNullOrWhiteSpace(content)) return;
+        
+        // 單輪截 2000 字元
+        var truncated = content.Length > 2000 ? content[..2000] : content;
+        _chatHistory.Add(new ChatTurn { Role = role, Content = truncated });
+        
+        // 保留最近 10 輪 (10 輪對話 = 20 個 turn)
+        while (_chatHistory.Count > 20)
+            _chatHistory.RemoveAt(0);
+            
+        // 總量上限 8000 字元 (累計 turn 長度)
+        while (_chatHistory.Count > 0 && _chatHistory.Sum(t => t.Content.Length) > 8000)
+            _chatHistory.RemoveAt(0);
+    }
+
+    private void ClearHistory()
+    {
+        _chatHistory.Clear();
+    }
+
+    public void SelectDatumPlane(string name)
+    {
+        var node = FeatureTree.FirstOrDefault(n => n.FeatureId == name);
+        if (node != null)
+        {
+            SelectedFeature = node;
+        }
+    }
+
     private void RefreshCanExecute()
     {
         ((AsyncRelayCommand)SendCommand).RaiseCanExecuteChanged();
@@ -1312,6 +1932,7 @@ public class MainViewModel : INotifyPropertyChanged
         ((AsyncRelayCommand)EditSketchCommand).RaiseCanExecuteChanged();
         ((AsyncRelayCommand)DeleteFeatureCommand).RaiseCanExecuteChanged();
         ((RelayCommand)EditParametersCommand).RaiseCanExecuteChanged();
+        ((AsyncRelayCommand)ExportChatCommand).RaiseCanExecuteChanged();
         OnPropertyChanged(nameof(HasProject));
     }
 

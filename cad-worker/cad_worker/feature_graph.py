@@ -19,6 +19,8 @@ class FeatureType(str, Enum):
     PAD = "pad"
     POCKET = "pocket"
     REVOLVE = "revolve"
+    SWEEP = "sweep"
+    LOFT = "loft"
     HOLE = "hole"
     LINEAR_PATTERN = "linear_pattern"
     CIRCULAR_PATTERN = "circular_pattern"
@@ -102,6 +104,7 @@ class Feature:
     constraints: list[dict[str, Any]] = field(default_factory=list)
     parameters: dict[str, Any] = field(default_factory=dict)
     standard_parts: dict[str, Any] = field(default_factory=dict)
+    plane: dict[str, Any] = field(default_factory=lambda: {"base": "XY", "offset": 0})
     validation: ValidationSpec | None = None
     source: FeatureSource = FeatureSource.LLM
     llm_description: str = ""
@@ -119,6 +122,7 @@ class Feature:
             "constraints": self.constraints,
             "parameters": self.parameters,
             "standard_parts": self.standard_parts,
+            "plane": self.plane,
             "validation": self.validation.to_dict() if self.validation else None,
             "source": self.source.value if isinstance(self.source, FeatureSource) else self.source,
             "llm_description": self.llm_description,
@@ -140,6 +144,7 @@ class Feature:
             constraints=d.get("constraints", []),
             parameters=d.get("parameters", {}),
             standard_parts=d.get("standard_parts", {}),
+            plane=d.get("plane", {"base": "XY", "offset": 0}),
             validation=validation,
             source=FeatureSource(d.get("source", "llm")),
             llm_description=d.get("llm_description", ""),
@@ -170,8 +175,9 @@ class FeatureGraph:
         self, feature_id: str, parameters: dict[str, Any] | None = None,
         standard_parts: dict[str, Any] | None = None,
         sketch_entities: list[dict[str, Any]] | None = None,
+        plane: dict[str, Any] | None = None,
     ) -> Feature:
-        """更新特徵參數、標準件、草圖實體，並將其下游特徵標記為 pending。"""
+        """更新特徵參數、標準件、草圖實體、基準面，並將其下游特徵標記為 pending。"""
         if feature_id not in self._features:
             raise ValueError(f"特徵 '{feature_id}' 不存在")
         feature = self._features[feature_id]
@@ -181,6 +187,8 @@ class FeatureGraph:
             feature.standard_parts.update(standard_parts)
         if sketch_entities is not None:
             feature.sketch_entities = sketch_entities
+        if plane is not None:
+            feature.plane = plane
         feature.rebuild_status = RebuildStatus.PENDING
         # 標記所有下游為 pending（增量重建）
         for dep_id in self._get_downstream(feature_id):
