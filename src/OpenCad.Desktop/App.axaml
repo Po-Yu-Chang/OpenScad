@@ -2,8 +2,102 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              x:Class="OpenCad.Desktop.App"
              RequestedThemeVariant="Dark">
+
+    <Application.Resources>
+        <!-- Catppuccin Mocha 色票 -->
+        <SolidColorBrush x:Key="BaseBrush"        Color="#1e1e2e"/>
+        <SolidColorBrush x:Key="MantleBrush"     Color="#181825"/>
+        <SolidColorBrush x:Key="CrustBrush"      Color="#11111b"/>
+        <SolidColorBrush x:Key="SurfaceBrush"    Color="#313244"/>
+        <SolidColorBrush x:Key="Surface1Brush"   Color="#45475a"/>
+        <SolidColorBrush x:Key="TextBrush"       Color="#cdd6f4"/>
+        <SolidColorBrush x:Key="SubtextBrush"    Color="#a6adc8"/>
+        <SolidColorBrush x:Key="OverlayBrush"    Color="#6c7086"/>
+        <SolidColorBrush x:Key="AccentBrush"    Color="#89b4fa"/>
+        <SolidColorBrush x:Key="SuccessBrush"   Color="#a6e3a1"/>
+        <SolidColorBrush x:Key="WarningBrush"   Color="#f9e2af"/>
+        <SolidColorBrush x:Key="ErrorBrush"     Color="#f38ba8"/>
+        <SolidColorBrush x:Key="BorderBrush"    Color="#313244"/>
+        <SolidColorBrush x:Key="OverlayBgBrush" Color="#CC1e1e2e"/>
+    </Application.Resources>
+
     <Application.Styles>
         <FluentTheme />
         <StyleInclude Source="avares://Avalonia.Controls.DataGrid/Themes/Fluent.xaml" />
+
+        <!-- 工具列按鈕：透明底、hover SurfaceBrush、圓角 -->
+        <Style Selector="Button.tool">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
+            <Setter Property="CornerRadius" Value="6"/>
+            <Setter Property="Padding" Value="10,6"/>
+            <Setter Property="BorderThickness" Value="0"/>
+        </Style>
+        <Style Selector="Button.tool:pointerover">
+            <Setter Property="Background" Value="{DynamicResource SurfaceBrush}"/>
+        </Style>
+
+        <!-- 主要動作按鈕：AccentBrush 底、深色字 -->
+        <Style Selector="Button.primary">
+            <Setter Property="Background" Value="{DynamicResource AccentBrush}"/>
+            <Setter Property="Foreground" Value="#1e1e2e"/>
+            <Setter Property="CornerRadius" Value="6"/>
+            <Setter Property="Padding" Value="14,6"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="BorderThickness" Value="0"/>
+        </Style>
+        <Style Selector="Button.primary:pointerover">
+            <Setter Property="Background" Value="#74c7ec"/>
+        </Style>
+        <Style Selector="Button.primary:disabled">
+            <Setter Property="Opacity" Value="0.5"/>
+        </Style>
+
+        <!-- 懸浮視角按鈕 -->
+        <Style Selector="Button.view-btn">
+            <Setter Property="Background" Value="{DynamicResource OverlayBgBrush}"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
+            <Setter Property="CornerRadius" Value="4"/>
+            <Setter Property="Padding" Value="8,4"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="MinWidth" Value="44"/>
+        </Style>
+        <Style Selector="Button.view-btn:pointerover">
+            <Setter Property="Background" Value="{DynamicResource SurfaceBrush}"/>
+        </Style>
+
+        <!-- 訊息氣泡 -->
+        <Style Selector="Border.msg-user">
+            <Setter Property="Background" Value="{DynamicResource Surface1Brush}"/>
+            <Setter Property="CornerRadius" Value="10"/>
+            <Setter Property="Padding" Value="10,6"/>
+            <Setter Property="HorizontalAlignment" Value="Right"/>
+            <Setter Property="MaxWidth" Value="260"/>
+        </Style>
+        <Style Selector="Border.msg-assistant">
+            <Setter Property="Background" Value="{DynamicResource SurfaceBrush}"/>
+            <Setter Property="CornerRadius" Value="10"/>
+            <Setter Property="Padding" Value="10,6"/>
+            <Setter Property="HorizontalAlignment" Value="Left"/>
+            <Setter Property="MaxWidth" Value="260"/>
+        </Style>
+        <Style Selector="Border.msg-error">
+            <Setter Property="Background" Value="{DynamicResource SurfaceBrush}"/>
+            <Setter Property="CornerRadius" Value="10"/>
+            <Setter Property="Padding" Value="10,6"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource ErrorBrush}"/>
+            <Setter Property="BorderThickness" Value="3,0,0,0"/>
+            <Setter Property="HorizontalAlignment" Value="Left"/>
+            <Setter Property="MaxWidth" Value="260"/>
+        </Style>
+        <Style Selector="Border.msg-plan">
+            <Setter Property="Background" Value="{DynamicResource SurfaceBrush}"/>
+            <Setter Property="CornerRadius" Value="10"/>
+            <Setter Property="Padding" Value="12,8"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
+            <Setter Property="BorderThickness" Value="1,0,0,0"/>
+            <Setter Property="HorizontalAlignment" Value="Stretch"/>
+        </Style>
     </Application.Styles>
 </Application>

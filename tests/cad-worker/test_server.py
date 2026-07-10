@@ -45,3 +45,33 @@ class TestCreateProject:
         data = resp.json()
         assert "project_id" in data
         assert data["manifest"]["name"] == "Test"
+
+
+class TestPreviewToken:
+    """preview.glb 必須支援 ?token= query param（WebView GLTFLoader 無法帶自訂 header）。"""
+
+    def test_preview_with_valid_query_token(self, client, auth_headers):
+        # 先建立專案
+        resp = client.post("/api/projects", json={"name": "Test"}, headers=auth_headers)
+        pid = resp.json()["project_id"]
+        # 用 query token 嘗試取得 preview（檔案可能不存在，但應該不是 403）
+        resp = client.get(f"/api/projects/{pid}/preview.glb?token={SESSION_TOKEN}")
+        assert resp.status_code != 403  # 不是認證失敗
+
+    def test_preview_with_invalid_query_token(self, client, auth_headers):
+        resp = client.post("/api/projects", json={"name": "Test"}, headers=auth_headers)
+        pid = resp.json()["project_id"]
+        resp = client.get(f"/api/projects/{pid}/preview.glb?token=wrong-token")
+        assert resp.status_code == 403
+
+    def test_preview_with_valid_header_token(self, client, auth_headers):
+        resp = client.post("/api/projects", json={"name": "Test"}, headers=auth_headers)
+        pid = resp.json()["project_id"]
+        resp = client.get(f"/api/projects/{pid}/preview.glb", headers=auth_headers)
+        assert resp.status_code != 403
+
+    def test_preview_without_any_token(self, client, auth_headers):
+        resp = client.post("/api/projects", json={"name": "Test"}, headers=auth_headers)
+        pid = resp.json()["project_id"]
+        resp = client.get(f"/api/projects/{pid}/preview.glb")
+        assert resp.status_code == 403

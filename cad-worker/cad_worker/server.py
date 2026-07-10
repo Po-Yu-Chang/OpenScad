@@ -248,8 +248,16 @@ async def export_model(project_id: str, req: ExportRequest, _: None = Depends(ve
 
 
 @app.get("/api/projects/{project_id}/preview.glb")
-async def get_preview(project_id: str, _: None = Depends(verify_token)) -> Any:
-    """取得 GLB 預覽。"""
+async def get_preview(request: Request, project_id: str, token: str = "") -> Any:
+    """取得 GLB 預覽。
+
+    支援兩種認證方式：
+    1. X-Session-Token header（一般 API 呼叫）
+    2. ?token= query 參數（WebView GLTFLoader 無法帶自訂 header）
+    """
+    header_token = request.headers.get("X-Session-Token", "")
+    if header_token != SESSION_TOKEN and token != SESSION_TOKEN:
+        raise HTTPException(status_code=403, detail="無效的工作階段 Token")
     proj = _get_project(project_id)
     glb_path = proj["dir"] / "generated" / "model.glb"
     if not glb_path.exists():

@@ -13,7 +13,7 @@ public class Feature
     public string FeatureId { get; set; } = string.Empty;
 
     [JsonPropertyName("type")]
-    [JsonConverter(typeof(JsonStringEnumConverter))]
+    [JsonConverter(typeof(SnakeCaseEnumConverter))]
     public FeatureType Type { get; set; }
 
     [JsonPropertyName("name")]
@@ -41,14 +41,14 @@ public class Feature
     public ValidationSpec? Validation { get; set; }
 
     [JsonPropertyName("source")]
-    [JsonConverter(typeof(JsonStringEnumConverter))]
+    [JsonConverter(typeof(SnakeCaseEnumConverter))]
     public FeatureSource Source { get; set; } = FeatureSource.Llm;
 
     [JsonPropertyName("llm_description")]
     public string LlmDescription { get; set; } = string.Empty;
 
     [JsonPropertyName("rebuild_status")]
-    [JsonConverter(typeof(JsonStringEnumConverter))]
+    [JsonConverter(typeof(SnakeCaseEnumConverter))]
     public RebuildStatus RebuildStatus { get; set; } = RebuildStatus.Pending;
 
     [JsonPropertyName("error_message")]

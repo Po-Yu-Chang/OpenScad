@@ -157,7 +157,18 @@ public class CadWorkerClient : ICadWorker
 
     public string GetPreviewUrl(string projectId)
     {
-        return $"{_httpClient.BaseAddress}api/projects/{projectId}/preview.glb";
+        return $"{_httpClient.BaseAddress}api/projects/{projectId}/preview.glb?token={_sessionToken}&t={_rebuildCount}";
+    }
+
+    private int _rebuildCount;
+
+    /// <summary>
+    /// 重建計數——用於 preview URL 的 cache-busting 參數。
+    /// </summary>
+    public int RebuildCount
+    {
+        get => _rebuildCount;
+        set => _rebuildCount = value;
     }
 
     /// <summary>
@@ -174,6 +185,16 @@ public class CadWorkerClient : ICadWorker
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// 取得專案資訊與特徵圖（用於更新特徵樹）。
+    /// </summary>
+    public async Task<string> GetProjectAsync(string projectId)
+    {
+        var response = await _httpClient.GetAsync($"/api/projects/{projectId}");
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadAsStringAsync();
     }
 
     /// <summary>

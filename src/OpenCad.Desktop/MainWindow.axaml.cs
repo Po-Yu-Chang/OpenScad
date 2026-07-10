@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Specialized;
 using System.IO;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
 using AvaloniaWebView;
@@ -12,9 +14,9 @@ namespace OpenCad.Desktop;
 
 public partial class MainWindow : Window
 {
-    // DispatcherTimer 在 UI 執行緒觸發——WebView／FindControl 等 UI 存取才合法
     private DispatcherTimer? _messagePollTimer;
     private WebView? _webView;
+    private ScrollViewer? _chatScroll;
 
     public MainWindow()
     {
@@ -31,30 +33,66 @@ public partial class MainWindow : Window
     private void OnLoaded(object? sender, EventArgs e)
     {
         var webView = this.FindControl<WebView>("PART_Viewer");
-        if (webView == null) return;
-        _webView = webView;
-
-        // 訂閱 ViewModel 的 ViewerScriptRequested 事件
-        if (DataContext is ViewModels.MainViewModel vm)
+        if (webView != null)
         {
-            vm.ViewerScriptRequested += async script =>
+            _webView = webView;
+
+            // 訂閱 ViewModel 的 ViewerScriptRequested 事件
+            if (DataContext is ViewModels.MainViewModel vm)
             {
-                try { await webView.ExecuteScriptAsync(script); }
-                catch { /* WebView 尚未就緒 */ }
-            };
+                vm.ViewerScriptRequested += async script =>
+                {
+                    try { await webView.ExecuteScriptAsync(script); }
+                    catch { /* WebView 尚未就緒 */ }
+                };
+
+                // 訂閱 Messages 集合變更——自動捲到底
+                vm.Messages.CollectionChanged += OnMessagesChanged;
+            }
+
+            // 載入本地 viewer.html
+            var htmlPath = Path.Combine(AppContext.BaseDirectory, "viewer.html");
+            if (File.Exists(htmlPath))
+            {
+                webView.Url = new Uri(htmlPath);
+            }
         }
 
-        // 載入本地 viewer.html（使用 file:// 協定，確保離線可用且相對路徑正確）
-        var htmlPath = Path.Combine(AppContext.BaseDirectory, "viewer.html");
-        if (File.Exists(htmlPath))
-        {
-            webView.Url = new Uri(htmlPath);
-        }
+        _chatScroll = this.FindControl<ScrollViewer>("PART_ChatScroll");
 
-        // 啟動訊息輪詢計時器（每 200ms 檢查一次，UI 執行緒觸發）
+        // 訊息輪詢計時器
         _messagePollTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
         _messagePollTimer.Tick += OnMessagePoll;
         _messagePollTimer.Start();
+
+        // 鍵盤綁定：Enter 送出、Shift+Enter 換行
+        AddHandler(KeyDownEvent, OnKeyDown, Avalonia.Interactivity.RoutingStrategies.Tunnel);
+    }
+
+    private void OnKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter && e.KeyModifiers != KeyModifiers.Shift)
+        {
+            // 在提示輸入框中按 Enter 送出
+            if (DataContext is ViewModels.MainViewModel vm &&
+                !string.IsNullOrWhiteSpace(vm.InputText))
+            {
+                vm.SendCommand.Execute(null);
+                e.Handled = true;
+            }
+        }
+    }
+
+    private void OnMessagesChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        // 在 UI 執行緒自動捲到底
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (_chatScroll != null)
+            {
+                _chatScroll.ScrollToEnd();
+            }
+        });
     }
 
     private async void OnMessagePoll(object? sender, EventArgs e)
@@ -68,9 +106,7 @@ public partial class MainWindow : Window
             if (string.IsNullOrWhiteSpace(json) || json == "[]" || json == "\"[]\"")
                 return;
 
-            // ExecuteScriptAsync 返回的是 JSON 字串（含引號），需先去除外層引號再反序列化
             var inner = json.Trim('"');
-            // 處理 JSON 編碼的引號
             inner = inner.Replace("\\\"", "\"").Replace("\\\\", "\\");
             var messages = System.Text.Json.JsonSerializer.Deserialize<string[]>(inner);
             if (messages == null) return;
@@ -80,13 +116,11 @@ public partial class MainWindow : Window
                 var msg = ViewerBridge.ParseMessage(msgJson);
                 if (msg == null) continue;
 
-                // DispatcherTimer 已在 UI 執行緒，直接更新 ViewModel
                 if (msg.Type == ViewerBridge.MessageType.Loaded)
                 {
                     if (DataContext is ViewModels.MainViewModel vm)
                     {
                         vm.HasModel = true;
-                        vm.ModelInfoText = "3D 模型已載入";
                     }
                 }
                 else if (msg.Type == ViewerBridge.MessageType.Error)
@@ -104,9 +138,6 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>
-    /// 在 WebView 中執行 JavaScript（供 ViewModel 使用）。
-    /// </summary>
     public async Task ExecuteViewerScriptAsync(string script)
     {
         if (_webView != null)

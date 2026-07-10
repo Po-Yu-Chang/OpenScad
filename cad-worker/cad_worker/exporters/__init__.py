@@ -45,6 +45,26 @@ class StlExporter:
                 raise ImportError("無法匯出 STL：build123d 或 OCP 未安裝")
 
 
+def _part_to_trimesh(part: Any):
+    """BREP → trimesh，經 STL 中介格式三角化。
+
+    build123d 的 Mesher 不能直接產生記憶體網格物件（其 API 為
+    add_shape + write 檔案），因此統一走 STL 中介路徑。
+    """
+    import tempfile
+    import trimesh
+    tmp_stl = tempfile.NamedTemporaryFile(suffix=".stl", delete=False)
+    tmp_stl.close()
+    try:
+        StlExporter.export(part, Path(tmp_stl.name))
+        mesh = trimesh.load(tmp_stl.name)
+    finally:
+        Path(tmp_stl.name).unlink(missing_ok=True)
+    if not isinstance(mesh, trimesh.Trimesh):
+        mesh = trimesh.Trimesh(vertices=mesh.vertices, faces=mesh.faces)
+    return mesh
+
+
 class GlbExporter:
     """輸出 GLB 格式（輕量、瀏覽器顯示方便）。"""
 
@@ -52,28 +72,12 @@ class GlbExporter:
     def export(part: Any, path: Path) -> None:
         try:
             import trimesh
-            # 將 BREP 轉為三角網格
-            try:
-                from build123d import Mesher
-                mesher = Mesher(part, 0.1)
-                mesh = mesher.mesh
-            except ImportError:
-                # 備案：使用 STL 中介格式
-                import tempfile
-                tmp_stl = tempfile.NamedTemporaryFile(suffix=".stl", delete=False)
-                tmp_stl.close()
-                StlExporter.export(part, Path(tmp_stl.name))
-                mesh = trimesh.load(tmp_stl.name)
-                Path(tmp_stl.name).unlink(missing_ok=True)
-
-            # 匯出 GLB
-            if not isinstance(mesh, trimesh.Trimesh):
-                mesh = trimesh.Trimesh(vertices=mesh.vertices, faces=mesh.faces)
-            scene = trimesh.Scene(mesh)
-            glb_data = scene.export(file_type="glb")
-            path.write_bytes(glb_data)
         except ImportError:
             raise ImportError("無法匯出 GLB：trimesh 未安裝")
+        mesh = _part_to_trimesh(part)
+        scene = trimesh.Scene(mesh)
+        glb_data = scene.export(file_type="glb")
+        path.write_bytes(glb_data)
 
 
 class PngExporter:
@@ -83,30 +87,13 @@ class PngExporter:
     def export(part: Any, path: Path, width: int = 800, height: int = 600) -> None:
         try:
             import trimesh
-            import numpy as np
-
-            # 將 BREP 轉為網格
-            try:
-                from build123d import Mesher
-                mesher = Mesher(part, 0.1)
-                mesh = mesher.mesh
-            except ImportError:
-                import tempfile
-                tmp_stl = tempfile.NamedTemporaryFile(suffix=".stl", delete=False)
-                tmp_stl.close()
-                StlExporter.export(part, Path(tmp_stl.name))
-                mesh = trimesh.load(tmp_stl.name)
-                Path(tmp_stl.name).unlink(missing_ok=True)
-
-            if not isinstance(mesh, trimesh.Trimesh):
-                mesh = trimesh.Trimesh(vertices=mesh.vertices, faces=mesh.faces)
-
-            # 離屏渲染
-            scene = trimesh.Scene(mesh)
-            png_data = scene.save_image(resolution=[width, height])
-            path.write_bytes(png_data)
         except ImportError:
             raise ImportError("無法匯出 PNG：trimesh 未安裝")
+        mesh = _part_to_trimesh(part)
+        # 離屏渲染
+        scene = trimesh.Scene(mesh)
+        png_data = scene.save_image(resolution=[width, height])
+        path.write_bytes(png_data)
 
 
 class ExportManager:

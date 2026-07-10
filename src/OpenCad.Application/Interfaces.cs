@@ -67,6 +67,12 @@ public interface ICadWorker
 
     /// <summary>取得 GLB 預覽的 URL。</summary>
     string GetPreviewUrl(string projectId);
+
+    /// <summary>健康檢查。</summary>
+    Task<bool> CheckHealthAsync();
+
+    /// <summary>取得專案特徵圖（用於更新特徵樹）。</summary>
+    Task<string> GetProjectAsync(string projectId);
 }
 
 public class CommandResult
