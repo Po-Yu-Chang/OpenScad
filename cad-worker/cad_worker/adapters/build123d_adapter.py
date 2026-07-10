@@ -37,6 +37,82 @@ from ..feature_graph import FeatureGraph, Feature, FeatureType, ParameterValue
 from ..standard_parts import get_clearance_hole_diameter, get_counterbore_dimensions, get_nema_mounting
 
 
+class TopologyTrace:
+    """記錄重建期間每個特徵建立或修改了哪些邊。
+
+    用於語意化選邊——例如 fillet 可以排除「由 hole 建立的邊」。
+    topology handle 只在同一次 rebuild 中有效，不跨版本持久化。
+    """
+
+    def __init__(self) -> None:
+        # feature_id -> set of edge 物件（build123d Edge）
+        self._created_by: dict[str, set] = {}
+        # feature_id -> set of edge 物件（fillet/chamfer 選中的邊）
+        self._selected_by: dict[str, set] = {}
+
+    def record_created(self, feature_id: str, before_edges: set, after_edges: set) -> None:
+        """記錄某特徵新增或修改的邊（after - before）。"""
+        new_edges = after_edges - before_edges
+        if feature_id not in self._created_by:
+            self._created_by[feature_id] = set()
+        self._created_by[feature_id].update(new_edges)
+
+    def record_selected(self, feature_id: str, edges: list) -> None:
+        """記錄 fillet/chamfer 選中的邊。"""
+        self._selected_by[feature_id] = set(edges)
+
+    def created_by(self, feature_id: str) -> set:
+        """取得某特徵建立的邊集合。"""
+        return self._created_by.get(feature_id, set())
+
+    def selected_by(self, feature_id: str) -> set:
+        """取得某特徵選中的邊集合。"""
+        return self._selected_by.get(feature_id, set())
+
+    def get_all_created_edges(self) -> set:
+        """取得所有特徵建立的邊集合（聯集）。"""
+        all_edges: set = set()
+        for edges in self._created_by.values():
+            all_edges.update(edges)
+        return all_edges
+
+    def to_summary(self) -> dict[str, Any]:
+        """產生可序列化的摘要（不含 edge 物件）。"""
+        return {
+            "created_by": {fid: len(edges) for fid, edges in self._created_by.items()},
+            "selected_by": {fid: len(edges) for fid, edges in self._selected_by.items()},
+        }
+
+
+def _snapshot_edges(part: Any) -> set:
+    """取得 part 的所有邊的快照（用於 before/after diff）。"""
+    try:
+        return set(part.edges())
+    except Exception:
+        return set()
+
+
+def filter_by_axis(edges: list, axis: Any) -> list:
+    """篩選平行於指定軸的邊。"""
+    try:
+        from build123d import Edge
+        result = []
+        for e in edges:
+            try:
+                # 檢查邊的方向是否平行於指定軸
+                if hasattr(e, "direction"):
+                    d = e.direction
+                    if (abs(d.X - axis.direction.X) < 0.01 and
+                            abs(d.Y - axis.direction.Y) < 0.01 and
+                            abs(d.Z - axis.direction.Z) < 0.01):
+                        result.append(e)
+            except Exception:
+                pass
+        return result
+    except Exception:
+        return edges
+
+
 class Build123dAdapter:
     """將 Feature Graph 轉譯成 build123d 建模命令的 Adapter。"""
 
@@ -50,22 +126,14 @@ class Build123dAdapter:
     def build(self, graph: FeatureGraph) -> "Part":
         """依拓撲排序重建整個 Feature Graph，回傳最終實體。
 
-        鏈式重建：每個修改實體的特徵（hole/pocket/fillet/chamfer/shell）
-        以前一個特徵的結果為輸入，而非只看自己宣告的 input。
+        每個特徵從自己宣告的 input 取得精確輸入，不使用全域 current_solid。
+        這確保 Feature Graph 的依賴關係與實際執行順序一致。
+
+        回傳 BuildResult，包含 shape 與 topology trace（用於語意化選邊）。
         """
         order = graph.topological_sort()
         parts: dict[str, Part] = {}
-        current_solid: Part | None = None  # 鏈式重建的目前實體
-
-        # 會修改實體的特徵類型——這些會以 current_solid 為輸入
-        MODIFYING_TYPES = {
-            FeatureType.HOLE, FeatureType.POCKET,
-            FeatureType.FILLET, FeatureType.CHAMFER,
-            FeatureType.SHELL,
-            FeatureType.BOOLEAN_UNION,
-            FeatureType.BOOLEAN_DIFFERENCE,
-            FeatureType.BOOLEAN_INTERSECTION,
-        }
+        trace = TopologyTrace()  # 記錄每個特徵建立/修改了哪些邊
 
         for fid in order:
             feature = graph.get_feature(fid)
@@ -73,16 +141,9 @@ class Build123dAdapter:
                 continue
             feature.rebuild_status = "building"
             try:
-                # 對修改型特徵，注入 current_solid 作為 input 的 fallback
-                result = self._build_feature(feature, parts, graph, current_solid)
+                result = self._build_feature(feature, parts, graph, trace)
                 if result is not None:
                     parts[fid] = result
-                    # 更新鏈：只有產生實體的特徵才推進 current_solid
-                    if feature.type in MODIFYING_TYPES or feature.type in (
-                        FeatureType.PAD, FeatureType.REVOLVE,
-                        FeatureType.SWEEP, FeatureType.LOFT,
-                    ):
-                        current_solid = result
                 feature.rebuild_status = "success"
                 feature.error_message = ""
             except Exception as e:
@@ -90,20 +151,26 @@ class Build123dAdapter:
                 feature.error_message = str(e)
                 raise
 
-        return current_solid
+        # 回傳最後一個產生實體的特徵結果（以拓撲排序最後者為準）
+        final_part = None
+        for fid in reversed(order):
+            if fid in parts:
+                final_part = parts[fid]
+                break
+        return final_part
 
     def _build_feature(
         self,
         feature: Feature,
         parts: dict[str, "Part"],
         graph: FeatureGraph,
-        current_solid: "Part | None" = None,
+        trace: "TopologyTrace | None" = None,
     ) -> "Part | None":
         """根據特徵類型分派到對應的建構方法。"""
         method = getattr(self, f"_build_{feature.type.value}", None)
         if method is None:
             raise ValueError(f"不支援的特徵類型: {feature.type}")
-        return method(feature, parts, graph, current_solid)
+        return method(feature, parts, graph, trace)
 
     def _get_param(self, feature: Feature, key: str, default: float = 0.0) -> float:
         """從特徵參數取得數值，自動換算為 mm。"""
@@ -114,7 +181,7 @@ class Build123dAdapter:
 
     def _build_sketch(
         self, feature: Feature, parts: dict[str, "Part"], graph: FeatureGraph,
-        current_solid: "Part | None" = None,
+        trace: "TopologyTrace | None" = None,
     ) -> "Part | None":
         """建立草圖。build123d 的草圖由參數直接計算位置。
 
@@ -256,7 +323,7 @@ class Build123dAdapter:
 
     def _build_pad(
         self, feature: Feature, parts: dict[str, "Part"], graph: FeatureGraph,
-        current_solid: "Part | None" = None,
+        trace: "TopologyTrace | None" = None,
     ) -> "Part | None":
         """拉伸草圖成實體。
 
@@ -301,13 +368,11 @@ class Build123dAdapter:
 
     def _build_pocket(
         self, feature: Feature, parts: dict[str, "Part"], graph: FeatureGraph,
-        current_solid: "Part | None" = None,
+        trace: "TopologyTrace | None" = None,
     ) -> "Part | None":
         """切除材料。支援草圖參照與位置列表。"""
-        # 鏈式重建：優先使用 current_solid（上一個特徵的結果）
-        base_part = current_solid
-        if base_part is None:
-            base_part = parts.get(feature.input) if feature.input else None
+        # 從宣告的 input 取得基礎實體——不再使用 current_solid fallback
+        base_part = parts.get(feature.input) if feature.input else None
         sketch_part = None
         # 尋找草圖參照——從 graph 查特徵類型，只取 sketch 類型的參照
         for ref in feature.references:
@@ -377,15 +442,16 @@ class Build123dAdapter:
 
     def _build_hole(
         self, feature: Feature, parts: dict[str, "Part"], graph: FeatureGraph,
-        current_solid: "Part | None" = None,
+        trace: "TopologyTrace | None" = None,
     ) -> "Part | None":
         """建立孔特徵。支援標準件查表與沉頭孔（counterbore）。"""
-        # 鏈式重建：優先使用 current_solid
-        base_part = current_solid
-        if base_part is None:
-            base_part = parts.get(feature.input) if feature.input else None
+        # 從宣告的 input 取得基礎實體——不再使用 current_solid fallback
+        base_part = parts.get(feature.input) if feature.input else None
         if base_part is None:
             raise ValueError(f"找不到基礎實體: {feature.input}")
+
+        # 記錄切除前邊快照（用於 topology trace）
+        before_edges = _snapshot_edges(base_part)
 
         # 查表取得孔徑
         sp = feature.standard_parts or {}
@@ -442,11 +508,16 @@ class Build123dAdapter:
                         Cylinder(counterbore_diameter / 2, counterbore_depth)
                 result = result.cut(bp_cb.part)
 
+        # 記錄 topology trace——hole 新增了哪些邊
+        if trace is not None:
+            after_edges = _snapshot_edges(result)
+            trace.record_created(feature.feature_id, before_edges, after_edges)
+
         return result
 
     def _build_linear_pattern(
         self, feature: Feature, parts: dict[str, "Part"], graph: FeatureGraph,
-        current_solid: "Part | None" = None,
+        trace: "TopologyTrace | None" = None,
     ) -> "Part | None":
         """線性陣列。
 
@@ -481,7 +552,15 @@ class Build123dAdapter:
                 result = result.fuse(offset_part)
         return result
 
-    def _select_edges(self, part: "Part", selector: str, exclude_holes: bool = False) -> list:
+    def _select_edges(
+        self,
+        part: "Part",
+        selector: str,
+        exclude_holes: bool = False,
+        trace: "TopologyTrace | None" = None,
+        graph: "FeatureGraph | None" = None,
+        feature: "Feature | None" = None,
+    ) -> list:
         """根據選擇器字串挑選邊。
 
         支援的選擇器：
@@ -491,8 +570,17 @@ class Build123dAdapter:
         - "top": 頂面邊
         - "bottom": 底面邊
 
-        exclude_holes=True 時，排除圓柱面孔的邊（用於「通孔不要動」場景）。
+        exclude_holes=True 時，使用 topology provenance 排除由 hole/pocket
+        特徵建立的邊（需要 trace 參數）。若無 trace，fallback 到 GeomType.CIRCLE。
+
+        也支援 edge_selector DSL（dict 格式）：
+        {"include": [{"kind": "all_edges"}],
+         "exclude": [{"kind": "created_by", "feature_id": "hole_center"}]}
         """
+        # 支援 edge_selector DSL（dict 格式）
+        if isinstance(selector, dict):
+            return self._resolve_edge_selector(part, selector, trace, graph)
+
         if selector == "all":
             result = list(part.edges())
         elif selector == "all_vertical":
@@ -514,25 +602,106 @@ class Build123dAdapter:
         else:
             result = list(part.edges())
 
-        # 排除圓柱面孔（hole）的邊——用於「通孔不要動」場景
+        # 排除孔的邊——優先使用 topology provenance，fallback 到 GeomType.CIRCLE
         if exclude_holes and result:
-            # 孔的邊是圓形邊（CIRCLE），外邊緣是直線邊（LINE）
-            # 也可以透過 face.geom_type == CYLINDER 來判斷，但 edge.geom_type 更直接
-            from build123d import GeomType
-            filtered = [e for e in result if e.geom_type != GeomType.CIRCLE]
-            result = filtered
+            if trace is not None and graph is not None and feature is not None:
+                # 語意化方式：排除所有 hole/pocket 特徵建立的邊
+                hole_edge_set: set = set()
+                for fid, feat in graph.features.items():
+                    if feat.type in (FeatureType.HOLE, FeatureType.POCKET) and fid != feature.feature_id:
+                        hole_edge_set.update(trace.created_by(fid))
+                if hole_edge_set:
+                    result = [e for e in result if e not in hole_edge_set]
+                else:
+                    # trace 中沒有記錄——fallback 到幾何方式
+                    from build123d import GeomType
+                    result = [e for e in result if e.geom_type != GeomType.CIRCLE]
+            else:
+                # 無 trace——使用幾何 fallback
+                from build123d import GeomType
+                result = [e for e in result if e.geom_type != GeomType.CIRCLE]
+
+        return result
+
+    def _resolve_edge_selector(
+        self,
+        part: "Part",
+        selector: dict[str, Any],
+        trace: "TopologyTrace | None" = None,
+        graph: "FeatureGraph | None" = None,
+    ) -> list:
+        """解析 edge_selector DSL。
+
+        格式：
+        {"include": [{"kind": "all_edges"|"top"|"bottom"|...}],
+         "exclude": [{"kind": "created_by", "feature_id": "hole_1"}],
+         "filters": [{"kind": "vertical"|"horizontal", ...}]}
+        """
+        all_edges = list(part.edges())
+        result = all_edges
+
+        # include 限制
+        include_rules = selector.get("include", [{"kind": "all_edges"}])
+        if include_rules:
+            included: list = []
+            for rule in include_rules:
+                kind = rule.get("kind", "all_edges")
+                if kind == "all_edges":
+                    included.extend(all_edges)
+                elif kind == "top":
+                    bb = part.bounding_box()
+                    top_z = bb.max.Z
+                    included.extend([e for e in all_edges
+                                     if all(abs(v.Z - top_z) < 0.01 for v in e.vertices())])
+                elif kind == "bottom":
+                    bb = part.bounding_box()
+                    bot_z = bb.min.Z
+                    included.extend([e for e in all_edges
+                                     if all(abs(v.Z - bot_z) < 0.01 for v in e.vertices())])
+                elif kind == "all_vertical":
+                    included.extend(list(part.edges().filter_by(Axis.Z)))
+                elif kind == "all_horizontal":
+                    included.extend(list(part.edges().filter_by(Axis.X)))
+                    included.extend(list(part.edges().filter_by(Axis.Y)))
+            # 去重
+            seen = set()
+            result = []
+            for e in included:
+                if id(e) not in seen:
+                    seen.add(id(e))
+                    result.append(e)
+
+        # exclude 排除
+        exclude_rules = selector.get("exclude", [])
+        for rule in exclude_rules:
+            kind = rule.get("kind", "")
+            if kind == "created_by" and trace is not None:
+                fid = rule.get("feature_id", "")
+                exclude_set = trace.created_by(fid)
+                result = [e for e in result if e not in exclude_set]
+            elif kind == "geom_circle":
+                from build123d import GeomType
+                result = [e for e in result if e.geom_type != GeomType.CIRCLE]
+
+        # filters 進一步篩選
+        filter_rules = selector.get("filters", [])
+        for rule in filter_rules:
+            kind = rule.get("kind", "")
+            if kind == "vertical":
+                result = list(filter_by_axis(result, Axis.Z))
+            elif kind == "horizontal":
+                result = (list(filter_by_axis(result, Axis.X)) +
+                          list(filter_by_axis(result, Axis.Y)))
 
         return result
 
     def _build_fillet(
         self, feature: Feature, parts: dict[str, "Part"], graph: FeatureGraph,
-        current_solid: "Part | None" = None,
+        trace: "TopologyTrace | None" = None,
     ) -> "Part | None":
         """圓角。需要指定要導圓角的邊。"""
-        # 鏈式重建：優先使用 current_solid
-        base_part = current_solid
-        if base_part is None:
-            base_part = parts.get(feature.input) if feature.input else None
+        # 從宣告的 input 取得基礎實體——不再使用 current_solid fallback
+        base_part = parts.get(feature.input) if feature.input else None
         if base_part is None:
             raise ValueError(f"找不到基礎實體: {feature.input}")
 
@@ -540,21 +709,24 @@ class Build123dAdapter:
         edge_selector = feature.parameters.get("edges", "all")
         exclude_holes = feature.parameters.get("exclude_holes", False)
 
-        edges = self._select_edges(base_part, edge_selector, exclude_holes)
+        edges = self._select_edges(base_part, edge_selector, exclude_holes, trace, graph, feature)
         if not edges:
             raise ValueError(f"找不到符合條件的邊來導圓角: {edge_selector}")
+
+        # 記錄選中的邊到 trace
+        if trace is not None:
+            trace.record_selected(feature.feature_id, edges)
+
         result = base_part.fillet(radius, edges)
         return result
 
     def _build_chamfer(
         self, feature: Feature, parts: dict[str, "Part"], graph: FeatureGraph,
-        current_solid: "Part | None" = None,
+        trace: "TopologyTrace | None" = None,
     ) -> "Part | None":
         """倒角。需要指定要倒角的邊。"""
-        # 鏈式重建：優先使用 current_solid
-        base_part = current_solid
-        if base_part is None:
-            base_part = parts.get(feature.input) if feature.input else None
+        # 從宣告的 input 取得基礎實體——不再使用 current_solid fallback
+        base_part = parts.get(feature.input) if feature.input else None
         if base_part is None:
             raise ValueError(f"找不到基礎實體: {feature.input}")
 
@@ -562,21 +734,24 @@ class Build123dAdapter:
         edge_selector = feature.parameters.get("edges", "all")
         exclude_holes = feature.parameters.get("exclude_holes", False)
 
-        edges = self._select_edges(base_part, edge_selector, exclude_holes)
+        edges = self._select_edges(base_part, edge_selector, exclude_holes, trace, graph, feature)
         if not edges:
             raise ValueError(f"找不到符合條件的邊來倒角: {edge_selector}")
+
+        # 記錄選中的邊到 trace
+        if trace is not None:
+            trace.record_selected(feature.feature_id, edges)
+
         result = base_part.chamfer(length, None, edges)
         return result
 
     def _build_shell(
         self, feature: Feature, parts: dict[str, "Part"], graph: FeatureGraph,
-        current_solid: "Part | None" = None,
+        trace: "TopologyTrace | None" = None,
     ) -> "Part | None":
         """薄殼。使用 offset(amount=-thickness) 建立內部空腔。"""
-        # 鏈式重建：優先使用 current_solid
-        base_part = current_solid
-        if base_part is None:
-            base_part = parts.get(feature.input) if feature.input else None
+        # 從宣告的 input 取得基礎實體——不再使用 current_solid fallback
+        base_part = parts.get(feature.input) if feature.input else None
         if base_part is None:
             raise ValueError(f"找不到基礎實體: {feature.input}")
 
@@ -586,7 +761,7 @@ class Build123dAdapter:
 
     def _build_revolve(
         self, feature: Feature, parts: dict[str, "Part"], graph: FeatureGraph,
-        current_solid: "Part | None" = None,
+        trace: "TopologyTrace | None" = None,
     ) -> "Part | None":
         """迴轉。迴轉軸須落在草圖平面內，依草圖 plane 決定：XY/XZ 用 X 軸，YZ 用 Y 軸。"""
         sketch_part = parts.get(feature.input) if feature.input else None
@@ -608,7 +783,7 @@ class Build123dAdapter:
 
     def _build_sweep(
         self, feature: Feature, parts: dict[str, "Part"], graph: FeatureGraph,
-        current_solid: "Part | None" = None,
+        trace: "TopologyTrace | None" = None,
     ) -> "Part | None":
         """掃描：將輪廓草圖沿路徑草圖掃描成實體。
 
@@ -690,7 +865,7 @@ class Build123dAdapter:
 
     def _build_loft(
         self, feature: Feature, parts: dict[str, "Part"], graph: FeatureGraph,
-        current_solid: "Part | None" = None,
+        trace: "TopologyTrace | None" = None,
     ) -> "Part | None":
         """放樣：在多個輪廓草圖之間建立漸變實體。
 
@@ -717,7 +892,7 @@ class Build123dAdapter:
 
     def _build_mirror(
         self, feature: Feature, parts: dict[str, "Part"], graph: FeatureGraph,
-        current_solid: "Part | None" = None,
+        trace: "TopologyTrace | None" = None,
     ) -> "Part | None":
         """鏡像。"""
         base_part = parts.get(feature.input) if feature.input else None
@@ -729,7 +904,7 @@ class Build123dAdapter:
 
     def _build_boolean_union(
         self, feature: Feature, parts: dict[str, "Part"], graph: FeatureGraph,
-        current_solid: "Part | None" = None,
+        trace: "TopologyTrace | None" = None,
     ) -> "Part | None":
         a = parts.get(feature.references[0]) if len(feature.references) > 0 else None
         b = parts.get(feature.references[1]) if len(feature.references) > 1 else None
@@ -739,7 +914,7 @@ class Build123dAdapter:
 
     def _build_boolean_difference(
         self, feature: Feature, parts: dict[str, "Part"], graph: FeatureGraph,
-        current_solid: "Part | None" = None,
+        trace: "TopologyTrace | None" = None,
     ) -> "Part | None":
         a = parts.get(feature.references[0]) if len(feature.references) > 0 else None
         b = parts.get(feature.references[1]) if len(feature.references) > 1 else None
@@ -749,7 +924,7 @@ class Build123dAdapter:
 
     def _build_boolean_intersection(
         self, feature: Feature, parts: dict[str, "Part"], graph: FeatureGraph,
-        current_solid: "Part | None" = None,
+        trace: "TopologyTrace | None" = None,
     ) -> "Part | None":
         a = parts.get(feature.references[0]) if len(feature.references) > 0 else None
         b = parts.get(feature.references[1]) if len(feature.references) > 1 else None
@@ -759,7 +934,7 @@ class Build123dAdapter:
 
     def _build_circular_pattern(
         self, feature: Feature, parts: dict[str, "Part"], graph: FeatureGraph,
-        current_solid: "Part | None" = None,
+        trace: "TopologyTrace | None" = None,
     ) -> "Part | None":
         """圓周陣列。
 

@@ -790,7 +790,7 @@ class TestSlotFeature:
         ))
         graph.add_feature(Feature(
             feature_id="pocket1", type=FeatureType.POCKET, name="slot pocket",
-            parameters={"depth": 3}, input="sk2", references=["sk2"],
+            parameters={"depth": 3}, input="pad1", references=["sk2"],
         ))
         adapter = Build123dAdapter()
         result = adapter.build(graph)

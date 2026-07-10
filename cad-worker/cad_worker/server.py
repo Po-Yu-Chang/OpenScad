@@ -206,6 +206,13 @@ async def apply_command(project_id: str, req: ApplyCommandRequest, _: None = Dep
     proj = _get_project(project_id)
     graph: FeatureGraph = proj["graph"]
 
+    # Python 端命令驗證——與 C# 端 CommandValidator 對稱
+    from .validators.command_validator import CommandValidator
+    cmd_dict = req.model_dump()
+    val_errors = CommandValidator.validate(cmd_dict)
+    if val_errors:
+        raise HTTPException(400, "; ".join(val_errors))
+
     if req.action == "create_feature":
         if req.feature is None:
             raise HTTPException(400, "create_feature 需要 feature 欄位")
@@ -274,6 +281,202 @@ async def apply_command(project_id: str, req: ApplyCommandRequest, _: None = Dep
 
     else:
         raise HTTPException(400, f"未知的 action: {req.action}")
+
+
+class ApplyPlanRequest(BaseModel):
+    """批量命令交易請求——所有命令在 staging graph 上試跑，
+    重建成功才 commit；任一步驟失敗則回滾，原圖不受影響。"""
+    commands: list[ApplyCommandRequest]
+    plan_label: str = ""
+
+
+@app.post("/api/projects/{project_id}/apply_plan")
+async def apply_plan(project_id: str, req: ApplyPlanRequest, _: None = Depends(verify_token)) -> dict[str, Any]:
+    """交易式套用多個命令（staging + rollback）。
+
+    流程：
+    1. 複製目前 graph → staging
+    2. 在 staging 上依序執行所有 commands
+    3. 在 staging 上重建
+    4. 若任一步驟或重建失敗 → 回滾（原 graph 不變），回傳錯誤
+    5. 若全部成功 → commit：取代原 graph、儲存單一 revision、回傳重建結果
+
+    這確保 LLM 計畫要嘛完整套用，要完全不套用——不會留下半成品。
+    """
+    proj = _get_project(project_id)
+    original_graph: FeatureGraph = proj["graph"]
+
+    # 1. 複製 → staging
+    staging = original_graph.clone()
+    applied_features: list[str] = []
+
+    # 2. 在 staging 上依序執行
+    for i, cmd in enumerate(req.commands):
+        try:
+            if cmd.action == "create_feature":
+                if cmd.feature is None:
+                    return _plan_error(f"第 {i+1} 步 create_feature 缺少 feature 欄位", applied_features)
+                feature = Feature.from_dict(cmd.feature)
+                staging.add_feature(feature)
+                applied_features.append(feature.feature_id)
+
+            elif cmd.action == "update_feature":
+                if cmd.target_feature_id is None:
+                    return _plan_error(f"第 {i+1} 步 update_feature 缺少 target_feature_id", applied_features)
+                staging.update_feature(
+                    cmd.target_feature_id, cmd.parameters or {},
+                    cmd.standard_parts, cmd.sketch_entities, cmd.plane,
+                )
+
+            elif cmd.action == "delete_feature":
+                if cmd.target_feature_id is None:
+                    return _plan_error(f"第 {i+1} 步 delete_feature 缺少 target_feature_id", applied_features)
+                downstream = staging.delete_feature(cmd.target_feature_id)
+                if downstream:
+                    return _plan_error(
+                        f"第 {i+1} 步：特徵 '{cmd.target_feature_id}' 被其他特徵依賴（{downstream}）",
+                        applied_features,
+                    )
+
+            elif cmd.action == "delete_feature_recursive":
+                if cmd.target_feature_id is None:
+                    return _plan_error(f"第 {i+1} 步 delete_feature_recursive 缺少 target_feature_id", applied_features)
+                staging.delete_feature_recursive(cmd.target_feature_id)
+
+            elif cmd.action == "set_material":
+                material = cmd.parameters or {}
+                material_name = material.get("material")
+                if not material_name:
+                    return _plan_error(f"第 {i+1} 步 set_material 缺少 parameters.material", applied_features)
+                from .standard_parts import get_material_density
+                get_material_density(material_name)  # 驗證材質存在
+
+            else:
+                return _plan_error(f"第 {i+1} 步：未知的 action '{cmd.action}'", applied_features)
+
+        except Exception as e:
+            return _plan_error(f"第 {i+1} 步失敗：{e}", applied_features)
+
+    # 3. 在 staging 上重建
+    try:
+        adapter = _get_adapter()
+        part = adapter.build(staging)
+    except Exception as e:
+        return _plan_error(f"重建失敗：{e}", applied_features, error_code=_classify_error(e))
+
+    # 4. Commit——全部成功才取代原 graph
+    proj["graph"] = staging
+    proj["part"] = part
+
+    # 儲存 features.json
+    staging.save(proj["dir"] / "features.json")
+
+    # 儲存單一 revision（整個 plan 一個 undo 步驟）
+    _save_plan_revision(proj, req.plan_label or f"apply_plan ({len(req.commands)} commands)")
+
+    # 質量屬性
+    material = proj.get("manifest", {}).get("material", "pla")
+    volume_mm3 = float(part.volume) if part else 0.0
+    area_mm2 = float(part.area) if part else 0.0
+    bounding_box = part.bounding_box() if part else None
+    from .standard_parts import calculate_mass
+    mass_g = calculate_mass(volume_mm3, material) if volume_mm3 > 0 else 0.0
+
+    return {
+        "status": "success",
+        "applied_count": len(req.commands),
+        "applied_features": applied_features,
+        "mass_properties": {
+            "volume_mm3": round(volume_mm3, 2),
+            "surface_area_mm2": round(area_mm2, 2),
+            "mass_g": round(mass_g, 2),
+            "material": material,
+            "density_g_cm3": round(mass_g / (volume_mm3 / 1000.0), 4) if volume_mm3 > 0 else 0.0,
+            "bounding_box_mm": {
+                "min_x": round(bounding_box.min.X, 2) if bounding_box else 0,
+                "min_y": round(bounding_box.min.Y, 2) if bounding_box else 0,
+                "min_z": round(bounding_box.min.Z, 2) if bounding_box else 0,
+                "max_x": round(bounding_box.max.X, 2) if bounding_box else 0,
+                "max_y": round(bounding_box.max.Y, 2) if bounding_box else 0,
+                "max_z": round(bounding_box.max.Z, 2) if bounding_box else 0,
+                "size_x": round(bounding_box.size.X, 2) if bounding_box else 0,
+                "size_y": round(bounding_box.size.Y, 2) if bounding_box else 0,
+                "size_z": round(bounding_box.size.Z, 2) if bounding_box else 0,
+            },
+        },
+    }
+
+
+def _plan_error(message: str, applied_features: list[str], error_code: str = "PLAN_FAILED") -> JSONResponse:
+    """回傳 plan 失敗回應——原 graph 不受影響（staging 被丟棄）。"""
+    return JSONResponse(
+        status_code=500,
+        content={
+            "status": "error",
+            "error_code": error_code,
+            "engine_message": message,
+            "applied_features": applied_features,  # 已在 staging 嘗試過的特徵（未被 commit）
+        },
+    )
+
+
+def _save_plan_revision(proj: dict[str, Any], label: str) -> None:
+    """為 apply_plan 儲存單一 revision（一個 plan = 一個 undo 步驟）。"""
+    proj_dir: Path = proj["dir"]
+    rev_dir = proj_dir / "revisions"
+    rev_dir.mkdir(parents=True, exist_ok=True)
+
+    current_rev = proj.get("_current_rev", 0)
+    if current_rev > 0:
+        for f in rev_dir.glob("*.json"):
+            num = int(f.stem)
+            if num > current_rev:
+                f.unlink()
+
+    existing = sorted(rev_dir.glob("*.json"))
+    next_num = int(existing[-1].stem) + 1 if existing else 1
+
+    from datetime import datetime, timezone
+    snapshot = {
+        "revision": next_num,
+        "graph": proj["graph"].to_dict(),
+        "command": {"action": "apply_plan", "label": label},
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    rev_path = rev_dir / f"{next_num:04d}.json"
+    rev_path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
+    proj["_current_rev"] = next_num
+
+    all_revs = sorted(rev_dir.glob("*.json"))
+    if len(all_revs) > MAX_REVISIONS:
+        for f in all_revs[:len(all_revs) - MAX_REVISIONS]:
+            f.unlink()
+
+    manifest = proj.get("manifest", {})
+    manifest["modified_at"] = snapshot["timestamp"]
+    (proj_dir / "manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+
+@app.post("/api/projects/{project_id}/reset")
+async def reset_project(project_id: str, _: None = Depends(verify_token)) -> dict[str, Any]:
+    """原子性清除所有特徵（Clear All）——單一交易，一個 undo 步驟。
+
+    不同於逐一刪除，這會建立一個空白 graph 的 revision，
+    讓使用者可以一次 Undo 回到清除前的完整狀態。
+    """
+    proj = _get_project(project_id)
+    proj["graph"] = FeatureGraph()
+    proj["part"] = None
+
+    # 儲存 features.json（空白）
+    proj["graph"].save(proj["dir"] / "features.json")
+
+    # 儲存 revision（一個 undo 步驟回到清除前）
+    _save_plan_revision(proj, "reset_project (clear all)")
+
+    return {"status": "cleared", "feature_count": 0}
 
 
 @app.post("/api/projects/{project_id}/rebuild")
@@ -443,10 +646,17 @@ async def undo(project_id: str, _: None = Depends(verify_token)) -> dict[str, An
     rev_dir = proj["dir"] / "revisions"
     current = proj.get("_current_rev", 0)
 
-    if current <= 1:
+    if current <= 0:
         raise HTTPException(400, "已是最早版本，無法復原")
 
     target = current - 1
+    if target == 0:
+        # 回到 revision 0（空白狀態——apply_plan 或 reset_project 前的起點）
+        proj["graph"] = FeatureGraph()
+        proj["part"] = None
+        proj["_current_rev"] = 0
+        return {"status": "ok", "current": 0}
+
     rev_path = rev_dir / f"{target:04d}.json"
     if not rev_path.exists():
         raise HTTPException(404, f"找不到版本 {target}")

@@ -102,6 +102,18 @@ public interface ICadWorker
 
     /// <summary>重做到下一版。</summary>
     Task<bool> RedoAsync(string projectId);
+
+    /// <summary>
+    /// 交易式套用多個命令（staging + rollback）。
+    /// 所有命令在 staging graph 上試跑，重建成功才 commit；
+    /// 任一步驟失敗則回滾，原 graph 不受影響。
+    /// </summary>
+    Task<PlanResult> ApplyPlanAsync(string projectId, List<CadCommand> commands, string planLabel = "");
+
+    /// <summary>
+    /// 原子性清除所有特徵（Clear All）——單一交易，一個 undo 步驟。
+    /// </summary>
+    Task<bool> ResetProjectAsync(string projectId);
 }
 
 public class CommandResult
@@ -117,6 +129,20 @@ public class RebuildResult
 {
     public string Status { get; set; } = string.Empty;
     public int FeatureCount { get; set; }
+    public string? ErrorCode { get; set; }
+    public string? EngineMessage { get; set; }
+    public MassProperties? MassProperties { get; set; }
+}
+
+/// <summary>
+/// 交易式套用計畫的結果。所有命令在 staging graph 上試跑，
+/// 重建成功才 commit；任一步驟失敗則回滾，原 graph 不受影響。
+/// </summary>
+public class PlanResult
+{
+    public string Status { get; set; } = string.Empty;
+    public int AppliedCount { get; set; }
+    public List<string> AppliedFeatures { get; set; } = new();
     public string? ErrorCode { get; set; }
     public string? EngineMessage { get; set; }
     public MassProperties? MassProperties { get; set; }

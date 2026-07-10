@@ -1057,8 +1057,9 @@ public class MainViewModel : INotifyPropertyChanged
         {
             IsBusy = true;
 
-            // 逐步驟確定性地建立特徵——LLM 只產生計畫，特徵由計畫直接映射，
-            // 並自動串接 input（pad/revolve 接最近的 sketch，其餘接前一個特徵）
+            // 收集所有命令——不逐一套用，而是透過 staging/rollback 交易一次套用
+            // 確保 LLM 計畫要嘛完整套用，要完全不套用——不會留下半成品
+            var commands = new List<CadCommand>();
             string? lastSketchId = null;
             string? lastFeatureId = null;
             var index = 0;
@@ -1087,13 +1088,13 @@ public class MainViewModel : INotifyPropertyChanged
                 }
 
                 // pad/revolve 沒有前置草圖時：若步驟自帶 sketch_entities，
-                // 確定性拆出草圖特徵；否則計畫不完整，中止並回報（避免建出必然重建失敗的特徵）
+                // 確定性拆出草圖特徵；否則計畫不完整，中止並回報
                 if (featType is FeatureType.Pad or FeatureType.Revolve && lastSketchId == null)
                 {
                     if (step.SketchEntities is { Count: > 0 })
                     {
                         var autoSketchId = $"sketch_{index}_auto";
-                        var sketchResult = await _worker.ApplyCommandAsync(_projectId, new CadCommand
+                        commands.Add(new CadCommand
                         {
                             Action = "create_feature",
                             Feature = new Feature
@@ -1106,12 +1107,6 @@ public class MainViewModel : INotifyPropertyChanged
                                 Plane = plane,
                             },
                         });
-                        if (sketchResult.Status == "error")
-                        {
-                            Messages.Add(ChatMessage.Error(
-                                $"特徵 {autoSketchId} 建立失敗：{sketchResult.ErrorCode} — {sketchResult.EngineMessage}"));
-                            return;
-                        }
                         lastSketchId = autoSketchId;
                     }
                     else
@@ -1131,12 +1126,11 @@ public class MainViewModel : INotifyPropertyChanged
                 };
 
                 // pocket 是雙輸入特徵：input=基礎實體、references=挖孔輪廓草圖
-                //（_build_pocket 從 references 找 sketch——放 input 進去會靜默不挖）
                 var references = featType == FeatureType.Pocket && lastSketchId != null
                     ? new List<string> { lastSketchId }
                     : input != null ? new List<string> { input } : new();
 
-                var command = new CadCommand
+                commands.Add(new CadCommand
                 {
                     Action = "create_feature",
                     Feature = new Feature
@@ -1147,20 +1141,11 @@ public class MainViewModel : INotifyPropertyChanged
                         Input = input,
                         References = references,
                         Parameters = step.Parameters,
-                        // 只有 sketch 特徵保留 sketch_entities；pad/revolve 的實體已拆至草圖
                         SketchEntities = featType == FeatureType.Sketch ? step.SketchEntities ?? new() : new(),
                         StandardParts = step.StandardParts ?? new(),
                         Plane = plane,
                     },
-                };
-
-                var result = await _worker.ApplyCommandAsync(_projectId, command);
-                if (result.Status == "error")
-                {
-                    Messages.Add(ChatMessage.Error(
-                        $"特徵 {featureId} 建立失敗：{result.ErrorCode} — {result.EngineMessage}"));
-                    return;
-                }
+                });
 
                 if (featType == FeatureType.Sketch)
                     lastSketchId = featureId;
@@ -1168,7 +1153,34 @@ public class MainViewModel : INotifyPropertyChanged
                     lastFeatureId = featureId;
             }
 
-            Messages.Add(ChatMessage.Assistant("計畫已套用，開始重建…"));
+            if (commands.Count == 0)
+            {
+                Messages.Add(ChatMessage.Error("計畫沒有可執行的步驟。"));
+                return;
+            }
+
+            // 本地驗證——在送出 Worker 前攔截格式錯誤
+            foreach (var cmd in commands)
+            {
+                var errors = CommandValidator.Validate(cmd);
+                if (errors.Count > 0)
+                {
+                    Messages.Add(ChatMessage.Error($"命令驗證失敗：{string.Join("；", errors)}"));
+                    return;
+                }
+            }
+
+            // 交易式套用——staging graph 上試跑，重建成功才 commit
+            var planResult = await _worker.ApplyPlanAsync(_projectId, commands, plan.Summary);
+            if (planResult.Status == "error")
+            {
+                Messages.Add(ChatMessage.Error(
+                    $"計畫套用失敗（已回滾，特徵圖未變更）：{planResult.ErrorCode} — {planResult.EngineMessage}"));
+                return;
+            }
+
+            Messages.Add(ChatMessage.Assistant(
+                $"計畫已套用（{planResult.AppliedCount} 步），開始重建…"));
             await RebuildAsync();
         }
         catch (Exception ex)
@@ -1371,6 +1383,15 @@ public class MainViewModel : INotifyPropertyChanged
         try
         {
             IsBusy = true;
+
+            // 本地驗證——在送出 Worker 前攔截格式錯誤
+            var errors = CommandValidator.Validate(command);
+            if (errors.Count > 0)
+            {
+                Messages.Add(ChatMessage.Error($"命令驗證失敗：{string.Join("；", errors)}"));
+                return;
+            }
+
             var result = await _worker.ApplyCommandAsync(_projectId, command);
             if (result.Status == "error")
             {
@@ -1453,43 +1474,17 @@ public class MainViewModel : INotifyPropertyChanged
         {
             IsBusy = true;
 
-            // 取得目前特徵圖，找出所有非基準面的特徵 ID
-            var projectJson = await _worker.GetProjectAsync(_projectId);
-            using var doc = JsonDocument.Parse(projectJson);
-            var featureIds = new List<string>();
-            if (doc.RootElement.TryGetProperty("features", out var featuresEl) &&
-                featuresEl.TryGetProperty("features", out var feats))
+            // 原子性清除——單一交易，一個 undo 步驟
+            // 不同於逐一刪除，這會建立一個空白 graph 的 revision，
+            // 讓使用者可以一次 Undo 回到清除前的完整狀態
+            var success = await _worker.ResetProjectAsync(_projectId);
+            if (!success)
             {
-                foreach (var prop in feats.EnumerateObject())
-                {
-                    // 跳過基準面和原點（以 __ 開頭的系統特徵）
-                    if (prop.Name.StartsWith("__")) continue;
-                    featureIds.Add(prop.Name);
-                }
-            }
-
-            if (featureIds.Count == 0)
-            {
-                Messages.Add(ChatMessage.Assistant("目前沒有任何使用者特徵，模型已經是空的。"));
+                Messages.Add(ChatMessage.Error("清空失敗——Worker 未回應成功。"));
                 return;
             }
 
-            // 逐一刪除所有使用者特徵
-            foreach (var fid in featureIds)
-            {
-                var result = await _worker.ApplyCommandAsync(_projectId, new CadCommand
-                {
-                    Action = "delete_feature",
-                    TargetFeatureId = fid,
-                });
-                if (result.Status == "error")
-                {
-                    Messages.Add(ChatMessage.Error($"刪除特徵 {fid} 失敗：{result.EngineMessage}"));
-                    return;
-                }
-            }
-
-            Messages.Add(ChatMessage.Assistant($"已清除全部 {featureIds.Count} 個特徵，模型已重置。"));
+            Messages.Add(ChatMessage.Assistant("已清除全部特徵，模型已重置。（可一次復原回到清除前狀態）"));
             await RebuildAsync();
         }
         catch (Exception ex)

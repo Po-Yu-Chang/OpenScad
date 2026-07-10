@@ -291,4 +291,59 @@ public class CadWorkerClient : ICadWorker
             return null;
         }
     }
+
+    /// <summary>
+    /// 交易式套用多個命令（staging + rollback）。
+    /// 所有命令在 staging graph 上試跑，重建成功才 commit；
+    /// 任一步驟失敗則回滾，原 graph 不受影響。
+    /// </summary>
+    public async Task<PlanResult> ApplyPlanAsync(string projectId, List<CadCommand> commands, string planLabel = "")
+    {
+        var req = new { commands, plan_label = planLabel };
+        var json = JsonSerializer.Serialize(req, JsonOpts);
+        var content = new StringContent(json, Encoding.UTF8, "application/json");
+
+        var response = await _httpClient.PostAsync($"/api/projects/{projectId}/apply_plan", content);
+        var body = await response.Content.ReadAsStringAsync();
+
+        JsonElement? result = null;
+        if (!response.IsSuccessStatusCode && !TryParseStructuredError(body, out result))
+        {
+            return new PlanResult
+            {
+                Status = "error",
+                ErrorCode = "TRANSPORT_ERROR",
+                EngineMessage = $"HTTP {response.StatusCode}: {body}",
+            };
+        }
+
+        result ??= JsonSerializer.Deserialize<JsonElement>(body, JsonOpts);
+
+        var status = result.Value.TryGetProperty("status", out var st) ? st.GetString() ?? "" : "";
+
+        var appliedFeatures = new List<string>();
+        if (result.Value.TryGetProperty("applied_features", out var af) && af.ValueKind == JsonValueKind.Array)
+        {
+            appliedFeatures = af.EnumerateArray().Select(x => x.GetString()!).ToList();
+        }
+
+        return new PlanResult
+        {
+            Status = status,
+            AppliedCount = result.Value.TryGetProperty("applied_count", out var ac) ? ac.GetInt32() : 0,
+            AppliedFeatures = appliedFeatures,
+            ErrorCode = result.Value.TryGetProperty("error_code", out var ec) ? ec.GetString() : null,
+            EngineMessage = result.Value.TryGetProperty("engine_message", out var em) ? em.GetString() : null,
+            MassProperties = result.Value.TryGetProperty("mass_properties", out var mp) ? ParseMassProperties(mp) : null,
+        };
+    }
+
+    /// <summary>
+    /// 原子性清除所有特徵（Clear All）——單一交易，一個 undo 步驟。
+    /// </summary>
+    public async Task<bool> ResetProjectAsync(string projectId)
+    {
+        var response = await _httpClient.PostAsync($"/api/projects/{projectId}/reset", null);
+        return response.IsSuccessStatusCode;
+    }
 }

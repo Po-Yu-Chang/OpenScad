@@ -105,8 +105,11 @@ class TestUndoRedo:
 
     def test_undo_past_beginning_rejected(self, client, headers):
         pid = _create_project_with_features(client, headers)
-        client.post(f"/api/projects/{pid}/undo", headers=headers)
-        resp = client.post(f"/api/projects/{pid}/undo", headers=headers)
+        # 2 features → revisions 1, 2. Undo 3 times:
+        # 2→1 (ok), 1→0 (ok, empty graph), 0→? (rejected)
+        client.post(f"/api/projects/{pid}/undo", headers=headers)  # 2→1
+        client.post(f"/api/projects/{pid}/undo", headers=headers)  # 1→0
+        resp = client.post(f"/api/projects/{pid}/undo", headers=headers)  # 0→rejected
         assert resp.status_code == 400
 
 

@@ -296,6 +296,10 @@ class FeatureGraph:
     def load(cls, path: Path) -> "FeatureGraph":
         return cls.from_dict(json.loads(path.read_text(encoding="utf-8")))
 
+    def clone(self) -> "FeatureGraph":
+        """深複製 Feature Graph，用於 staging/rollback 交易。"""
+        return FeatureGraph.from_dict(self.to_dict())
+
     @property
     def features(self) -> dict[str, Feature]:
         return self._features
