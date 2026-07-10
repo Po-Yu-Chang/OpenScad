@@ -85,11 +85,20 @@ def _load_existing_projects() -> None:
             features_path = proj_dir / "features.json"
             if features_path.exists():
                 graph = FeatureGraph.load(features_path)
+            # 還原目前版本號——否則重啟後 undo 會誤判「已是最早版本」
+            current_rev = 0
+            rev_dir = proj_dir / "revisions"
+            if rev_dir.exists():
+                rev_files = sorted(rev_dir.glob("*.json"))
+                if rev_files:
+                    current_rev = int(rev_files[-1].stem)
+
             projects[project_id] = {
                 "graph": graph,
                 "part": None,  # BREP 需重建才有
                 "dir": proj_dir,
                 "manifest": manifest,
+                "_current_rev": current_rev,
             }
         except Exception:
             pass  # 跳過損壞的專案目錄
@@ -198,12 +207,14 @@ async def apply_command(project_id: str, req: ApplyCommandRequest, _: None = Dep
             raise HTTPException(400, "create_feature 需要 feature 欄位")
         feature = Feature.from_dict(req.feature)
         graph.add_feature(feature)
+        _save_revision(proj, req)
         return {"status": "created", "feature_id": feature.feature_id}
 
     elif req.action == "update_feature":
-        if req.target_feature_id is None or req.parameters is None:
-            raise HTTPException(400, "update_feature 需要 target_feature_id 和 parameters")
-        feature = graph.update_feature(req.target_feature_id, req.parameters)
+        if req.target_feature_id is None or (req.parameters is None and req.standard_parts is None):
+            raise HTTPException(400, "update_feature 需要 target_feature_id 和 parameters 或 standard_parts")
+        feature = graph.update_feature(req.target_feature_id, req.parameters or {}, req.standard_parts)
+        _save_revision(proj, req)
         return {"status": "updated", "feature_id": feature.feature_id}
 
     elif req.action == "delete_feature":
@@ -218,7 +229,15 @@ async def apply_command(project_id: str, req: ApplyCommandRequest, _: None = Dep
                 "affected_features": downstream,
                 "message": "此特徵被其他特徵依賴，請確認是否連同刪除",
             }
+        _save_revision(proj, req)
         return {"status": "deleted", "feature_id": req.target_feature_id}
+
+    elif req.action == "delete_feature_recursive":
+        if req.target_feature_id is None:
+            raise HTTPException(400, "delete_feature_recursive 需要 target_feature_id")
+        deleted = graph.delete_feature_recursive(req.target_feature_id)
+        _save_revision(proj, req)
+        return {"status": "deleted", "deleted_features": deleted}
 
     elif req.action == "rebuild":
         return await _rebuild(project_id, proj)
@@ -287,6 +306,151 @@ async def events(request: Request, project_id: str, _: None = Depends(verify_tok
         yield f"data: {json.dumps({'status': 'complete'})}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+# ─── 專案列表 ───
+
+@app.get("/api/projects")
+async def list_projects(_: None = Depends(verify_token)) -> dict[str, Any]:
+    """列出所有已載入專案。"""
+    result = []
+    for pid, proj in projects.items():
+        manifest = proj.get("manifest", {})
+        graph: FeatureGraph = proj["graph"]
+        result.append({
+            "project_id": pid,
+            "name": manifest.get("name", pid),
+            "modified_at": manifest.get("modified_at", ""),
+            "feature_count": len(graph.features),
+        })
+    return {"projects": result}
+
+
+# ─── 版本紀錄與 Undo/Redo ───
+
+MAX_REVISIONS = 50
+
+def _save_revision(proj: dict[str, Any], req: ApplyCommandRequest | None = None) -> None:
+    """在成功的命令後儲存 graph 快照到 revisions/ 目錄。"""
+    proj_dir: Path = proj["dir"]
+    rev_dir = proj_dir / "revisions"
+    rev_dir.mkdir(parents=True, exist_ok=True)
+
+    # 找下一個編號
+    existing = sorted(rev_dir.glob("*.json"))
+    next_num = 1
+    if existing:
+        last_num = int(existing[-1].stem)
+        next_num = last_num + 1
+
+        # undo 後有新命令——捨棄 redo 分支（刪除目前的 revision 之後的所有檔案）
+    # 線性歷史：目前 revision 編號為 current_rev，
+    # 如果 current_rev < 最新檔案編號，代表之前做過 undo，新命令應截斷 redo 分支
+    current_rev = proj.get("_current_rev", 0)
+    if current_rev > 0:
+        for f in rev_dir.glob("*.json"):
+            num = int(f.stem)
+            if num > current_rev:
+                f.unlink()
+
+    # 重新計算編號（截斷後可能需要重編）
+    existing = sorted(rev_dir.glob("*.json"))
+    if existing:
+        next_num = int(existing[-1].stem) + 1
+
+    from datetime import datetime, timezone
+    snapshot = {
+        "revision": next_num,
+        "graph": proj["graph"].to_dict(),
+        "command": {
+            "action": req.action if req else "",
+            "target_feature_id": req.target_feature_id if req else None,
+            "parameters": req.parameters if req else None,
+            "standard_parts": req.standard_parts if req else None,
+        } if req else None,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    rev_path = rev_dir / f"{next_num:04d}.json"
+    rev_path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
+    proj["_current_rev"] = next_num
+
+    # 快照上限 50——超過刪最舊
+    all_revs = sorted(rev_dir.glob("*.json"))
+    if len(all_revs) > MAX_REVISIONS:
+        for f in all_revs[:len(all_revs) - MAX_REVISIONS]:
+            f.unlink()
+
+    # 更新 manifest modified_at
+    manifest = proj.get("manifest", {})
+    manifest["modified_at"] = snapshot["timestamp"]
+    (proj_dir / "manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+
+@app.get("/api/projects/{project_id}/revisions")
+async def list_revisions(project_id: str, _: None = Depends(verify_token)) -> dict[str, Any]:
+    """列出專案的版本紀錄。"""
+    proj = _get_project(project_id)
+    rev_dir = proj["dir"] / "revisions"
+    result = []
+    if rev_dir.exists():
+        for f in sorted(rev_dir.glob("*.json")):
+            try:
+                data = json.loads(f.read_text(encoding="utf-8"))
+                cmd = data.get("command") or {}
+                summary = cmd.get("action", "")
+                if cmd.get("target_feature_id"):
+                    summary += f" → {cmd['target_feature_id']}"
+                result.append({
+                    "revision": data["revision"],
+                    "timestamp": data["timestamp"],
+                    "summary": summary,
+                })
+            except Exception:
+                pass
+    return {"revisions": result, "current": proj.get("_current_rev", 0)}
+
+
+@app.post("/api/projects/{project_id}/undo")
+async def undo(project_id: str, _: None = Depends(verify_token)) -> dict[str, Any]:
+    """回到上一版。"""
+    proj = _get_project(project_id)
+    rev_dir = proj["dir"] / "revisions"
+    current = proj.get("_current_rev", 0)
+
+    if current <= 1:
+        raise HTTPException(400, "已是最早版本，無法復原")
+
+    target = current - 1
+    rev_path = rev_dir / f"{target:04d}.json"
+    if not rev_path.exists():
+        raise HTTPException(404, f"找不到版本 {target}")
+
+    data = json.loads(rev_path.read_text(encoding="utf-8"))
+    proj["graph"] = FeatureGraph.from_dict(data["graph"])
+    proj["part"] = None  # 需重建
+    proj["_current_rev"] = target
+    return {"status": "ok", "current": target}
+
+
+@app.post("/api/projects/{project_id}/redo")
+async def redo(project_id: str, _: None = Depends(verify_token)) -> dict[str, Any]:
+    """前進一版。"""
+    proj = _get_project(project_id)
+    rev_dir = proj["dir"] / "revisions"
+    current = proj.get("_current_rev", 0)
+
+    target = current + 1
+    rev_path = rev_dir / f"{target:04d}.json"
+    if not rev_path.exists():
+        raise HTTPException(400, "已是最新版本，無法重做")
+
+    data = json.loads(rev_path.read_text(encoding="utf-8"))
+    proj["graph"] = FeatureGraph.from_dict(data["graph"])
+    proj["part"] = None
+    proj["_current_rev"] = target
+    return {"status": "ok", "current": target}
 
 
 # ─── 內部方法 ───

@@ -7,6 +7,12 @@
         MinWidth="960" MinHeight="600"
         Background="{DynamicResource BaseBrush}">
 
+    <!-- 鍵盤快捷鍵 -->
+    <Window.KeyBindings>
+        <KeyBinding Gesture="Ctrl+Z" Command="{Binding UndoCommand}" />
+        <KeyBinding Gesture="Ctrl+Y" Command="{Binding RedoCommand}" />
+    </Window.KeyBindings>
+
     <Design.DataContext>
         <vm:MainViewModel />
     </Design.DataContext>
@@ -16,12 +22,15 @@
 
         <!-- ═══ 工具列 ═══ -->
         <Border Grid.Row="0" Background="{DynamicResource MantleBrush}" Padding="8,4">
-            <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,*,Auto,Auto,Auto,Auto,Auto">
+            <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,*,Auto,Auto,Auto,Auto">
                 <!-- 檔案選單 -->
                 <Menu Grid.Column="0" Background="Transparent">
                     <MenuItem Header="檔案" Foreground="{DynamicResource TextBrush}">
-                        <MenuItem Header="開啟專案" Command="{Binding OpenProjectCommand}" IsEnabled="False" ToolTip.Tip="Phase 1 實作" />
+                        <MenuItem Header="開啟專案" Command="{Binding OpenProjectCommand}" ToolTip.Tip="列出已存專案" />
                         <MenuItem Header="儲存專案" Command="{Binding SaveProjectCommand}" IsEnabled="False" ToolTip.Tip="Phase 1 實作" />
+                        <Separator />
+                        <MenuItem Header="LLM 設定…" Command="{Binding OpenLlmSettingsCommand}" ToolTip.Tip="設定 OpenAI-compatible 端點（LiteLLM／Ollama）" />
+                        <MenuItem Header="重新偵測 LLM" Command="{Binding RedetectLlmCommand}" ToolTip.Tip="修改設定檔後重新連線" />
                     </MenuItem>
                 </Menu>
 
@@ -40,12 +49,16 @@
                 <!-- 重建 -->
                 <Button Grid.Column="3" Classes="primary" Content="重建" Command="{Binding RebuildCommand}" Margin="8,0,0,0" />
 
+                <!-- 復原/重做 -->
+                <Button Grid.Column="4" Classes="tool" Content="↶ 復原" Command="{Binding UndoCommand}" Margin="8,0,0,0" ToolTip.Tip="Ctrl+Z" />
+                <Button Grid.Column="5" Classes="tool" Content="↷ 重做" Command="{Binding RedoCommand}" Margin="4,0,0,0" ToolTip.Tip="Ctrl+Y" />
+
                 <!-- 右側動作 -->
-                <Button Grid.Column="5" Classes="tool" Content="匯出 STEP" Command="{Binding ExportCommand}" CommandParameter="step" Margin="0,0,8,0" />
-                <Button Grid.Column="6" Classes="tool" Content="匯出 STL" Command="{Binding ExportCommand}" CommandParameter="stl" Margin="0,0,8,0" />
+                <Button Grid.Column="7" Classes="tool" Content="匯出 STEP" Command="{Binding ExportCommand}" CommandParameter="step" Margin="0,0,8,0" />
+                <Button Grid.Column="8" Classes="tool" Content="匯出 STL" Command="{Binding ExportCommand}" CommandParameter="stl" Margin="0,0,8,0" />
 
                 <!-- 收合右欄 -->
-                <Button Grid.Column="8" Classes="tool" Content="⚙" Command="{Binding ToggleRightPanelCommand}" ToolTip.Tip="切換對話窗格" />
+                <Button Grid.Column="10" Classes="tool" Content="⚙" Command="{Binding ToggleRightPanelCommand}" ToolTip.Tip="切換對話窗格" />
             </Grid>
         </Border>
 
@@ -79,9 +92,15 @@
                             <ItemsControl ItemsSource="{Binding SelectedFeatureParameters}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
-                                        <Grid ColumnDefinitions="100,*" Margin="0,2">
-                                            <TextBlock Grid.Column="0" Text="{Binding Key}" Foreground="{DynamicResource SubtextBrush}" FontFamily="Consolas" FontSize="11" />
-                                            <TextBlock Grid.Column="1" Text="{Binding Value}" Foreground="{DynamicResource TextBrush}" FontFamily="Consolas" FontSize="11" TextWrapping="Wrap" />
+                                        <Grid ColumnDefinitions="100,*,Auto" Margin="0,2">
+                                            <TextBlock Grid.Column="0" Text="{Binding Key}" Foreground="{DynamicResource SubtextBrush}" FontFamily="Consolas" FontSize="11" VerticalAlignment="Center" />
+                                            <TextBox Grid.Column="1" Text="{Binding Value}" Foreground="{DynamicResource TextBrush}" FontFamily="Consolas" FontSize="11"
+                                                     IsReadOnly="{Binding !IsEditable}" Background="Transparent" BorderThickness="0,0,0,1"
+                                                     Padding="2" Margin="0,0,0,2" />
+                                            <Button Grid.Column="2" Content="✓" FontSize="11" Padding="6,2" Margin="4,0,0,0"
+                                                    Command="{Binding ApplyCommand}" IsVisible="{Binding IsDirty}"
+                                                    Background="{DynamicResource AccentBrush}" Foreground="{DynamicResource CrustBrush}"
+                                                    ToolTip.Tip="套用此參數並重建" />
                                         </Grid>
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
@@ -200,6 +219,49 @@
                                                 <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,6,0,0">
                                                     <Button Classes="primary" Content="套用" Command="{Binding ApplyPlanCommand}" />
                                                     <Button Classes="tool" Content="取消" Command="{Binding CancelPlanCommand}" />
+                                                </StackPanel>
+                                            </StackPanel>
+                                        </Border>
+
+                                        <!-- Diff 修改差異卡片 -->
+                                        <Border Classes="msg-plan" IsVisible="{Binding Kind, Converter={x:Static vm:MessageKindToVisibilityConverter.DiffIsVisible}}">
+                                            <StackPanel Spacing="6">
+                                                <TextBlock Text="修改差異" FontWeight="Bold" Foreground="{DynamicResource AccentBrush}" />
+                                                <TextBlock Text="{Binding Text}" Foreground="{DynamicResource TextBrush}" TextWrapping="Wrap" FontSize="12" />
+                                                <!-- 特徵 ID -->
+                                                <TextBlock Foreground="{DynamicResource SubtextBrush}" FontSize="11"
+                                                           Text="{Binding Diff.FeatureId, StringFormat='目標特徵：{0}'}" />
+                                                <!-- Before/After 參數對照 -->
+                                                <Border Background="{DynamicResource MantleBrush}" CornerRadius="4" Padding="8" Margin="0,4,0,0">
+                                                    <Grid ColumnDefinitions="1*,1*">
+                                                        <StackPanel Grid.Column="0" Spacing="2">
+                                                            <TextBlock Text="修改前" FontWeight="Bold" FontSize="11" Foreground="{DynamicResource SubtextBrush}" />
+                                                            <ItemsControl ItemsSource="{Binding Diff.Before}">
+                                                                <ItemsControl.ItemTemplate>
+                                                                    <DataTemplate>
+                                                                        <TextBlock FontSize="11" Foreground="{DynamicResource TextBrush}" TextWrapping="Wrap"
+                                                                                   Text="{Binding}" />
+                                                                    </DataTemplate>
+                                                                </ItemsControl.ItemTemplate>
+                                                            </ItemsControl>
+                                                        </StackPanel>
+                                                        <StackPanel Grid.Column="1" Spacing="2">
+                                                            <TextBlock Text="修改後" FontWeight="Bold" FontSize="11" Foreground="{DynamicResource AccentBrush}" />
+                                                            <ItemsControl ItemsSource="{Binding Diff.After}">
+                                                                <ItemsControl.ItemTemplate>
+                                                                    <DataTemplate>
+                                                                        <TextBlock FontSize="11" Foreground="{DynamicResource TextBrush}" TextWrapping="Wrap"
+                                                                                   Text="{Binding}" />
+                                                                    </DataTemplate>
+                                                                </ItemsControl.ItemTemplate>
+                                                            </ItemsControl>
+                                                        </StackPanel>
+                                                    </Grid>
+                                                </Border>
+                                                <!-- 按鈕列 -->
+                                                <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,6,0,0">
+                                                    <Button Classes="primary" Content="套用修改" Command="{Binding ApplyDiffCommand}" />
+                                                    <Button Classes="tool" Content="取消" Command="{Binding CancelDiffCommand}" />
                                                 </StackPanel>
                                             </StackPanel>
                                         </Border>

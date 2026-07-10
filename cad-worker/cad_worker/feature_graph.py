@@ -166,12 +166,18 @@ class FeatureGraph:
     def get_feature(self, feature_id: str) -> Feature | None:
         return self._features.get(feature_id)
 
-    def update_feature(self, feature_id: str, parameters: dict[str, Any]) -> Feature:
-        """更新特徵參數，並將其下游特徵標記為 pending。"""
+    def update_feature(
+        self, feature_id: str, parameters: dict[str, Any] | None = None,
+        standard_parts: dict[str, Any] | None = None,
+    ) -> Feature:
+        """更新特徵參數與標準件，並將其下游特徵標記為 pending。"""
         if feature_id not in self._features:
             raise ValueError(f"特徵 '{feature_id}' 不存在")
         feature = self._features[feature_id]
-        feature.parameters.update(parameters)
+        if parameters:
+            feature.parameters.update(parameters)
+        if standard_parts:
+            feature.standard_parts.update(standard_parts)
         feature.rebuild_status = RebuildStatus.PENDING
         # 標記所有下游為 pending（增量重建）
         for dep_id in self._get_downstream(feature_id):

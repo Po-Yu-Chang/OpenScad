@@ -13,6 +13,7 @@ public enum MessageKind
     Assistant,
     Error,
     Plan,
+    Diff,
 }
 
 /// <summary>
@@ -25,6 +26,9 @@ public class ChatMessage
     public DesignPlan? Plan { get; set; }
     public ICommand? ApplyPlanCommand { get; set; }
     public ICommand? CancelPlanCommand { get; set; }
+    public ModificationDiff? Diff { get; set; }
+    public ICommand? ApplyDiffCommand { get; set; }
+    public ICommand? CancelDiffCommand { get; set; }
 
     public static ChatMessage User(string text) => new()
     {
@@ -52,6 +56,15 @@ public class ChatMessage
         ApplyPlanCommand = applyCmd,
         CancelPlanCommand = cancelCmd,
     };
+
+    public static ChatMessage FromDiff(ModificationDiff diff, ICommand? applyCmd = null, ICommand? cancelCmd = null) => new()
+    {
+        Text = diff.Description,
+        Kind = MessageKind.Diff,
+        Diff = diff,
+        ApplyDiffCommand = applyCmd,
+        CancelDiffCommand = cancelCmd,
+    };
 }
 
 /// <summary>
@@ -67,10 +80,38 @@ public class FeatureNode
 }
 
 /// <summary>
-/// 特徵參數項——用於參數面板顯示。
+/// 特徵參數項——用於參數面板顯示與編輯。
+/// 編輯後透過 ApplyCommand 走與 LLM 相同的 update_feature 命令路徑。
 /// </summary>
-public class ParameterItem
+public class ParameterItem : System.ComponentModel.INotifyPropertyChanged
 {
+    private string _value = string.Empty;
+
     public string Key { get; set; } = string.Empty;
-    public string Value { get; set; } = string.Empty;
+
+    public string Value
+    {
+        get => _value;
+        set
+        {
+            _value = value;
+            OnPropertyChanged(nameof(Value));
+            OnPropertyChanged(nameof(IsDirty));
+        }
+    }
+
+    /// <summary>編輯前的原始值——用於判斷是否有未套用的變更。</summary>
+    public string OriginalValue { get; set; } = string.Empty;
+
+    public bool IsEditable { get; set; } = true;
+
+    /// <summary>有未套用的編輯時為 true（顯示套用按鈕）。</summary>
+    public bool IsDirty => IsEditable && Value != OriginalValue;
+
+    /// <summary>套用此參數變更（發 update_feature 命令並重建）。</summary>
+    public ICommand? ApplyCommand { get; set; }
+
+    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+    private void OnPropertyChanged(string name) =>
+        PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
 }

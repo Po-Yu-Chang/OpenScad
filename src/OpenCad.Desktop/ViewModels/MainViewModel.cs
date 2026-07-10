@@ -20,7 +20,7 @@ public class MainViewModel : INotifyPropertyChanged
 {
     private ICadWorker? _worker;
     private CadWorkerClient? _workerClient;
-    private OllamaLlmProvider? _llmProvider;
+    private ILlmProvider? _llmProvider;
 
     private string _inputText = string.Empty;
     private string _llmStatus = "LLM：偵測中…";
@@ -131,6 +131,10 @@ public class MainViewModel : INotifyPropertyChanged
     public ICommand RebuildCommand { get; }
     public ICommand LoadExampleCommand { get; }
     public ICommand ToggleRightPanelCommand { get; }
+    public ICommand UndoCommand { get; }
+    public ICommand OpenLlmSettingsCommand { get; }
+    public ICommand RedetectLlmCommand { get; }
+    public ICommand RedoCommand { get; }
 
     /// <summary>
     /// 當 ViewModel 需要在 3D 視窗中執行 JavaScript 時觸發。
@@ -144,13 +148,21 @@ public class MainViewModel : INotifyPropertyChanged
 
         SendCommand = new AsyncRelayCommand(SendAsync, () => !string.IsNullOrWhiteSpace(InputText));
         NewProjectCommand = new AsyncRelayCommand(NewProjectAsync, () => IsWorkerConnected);
-        OpenProjectCommand = new RelayCommand(() => { }, () => false);  // Phase 1 恆停用
+        OpenProjectCommand = new AsyncRelayCommand(OpenProjectAsync, () => IsWorkerConnected);
         SaveProjectCommand = new RelayCommand(() => { }, () => false);  // Phase 1 恆停用
         SetViewCommand = new RelayCommand<string>(SetView);
         ExportCommand = new AsyncRelayCommand<string>(ExportAsync, fmt => HasModel && IsWorkerConnected);
         RebuildCommand = new AsyncRelayCommand(RebuildAsync, () => HasProject && IsWorkerConnected);
         LoadExampleCommand = new AsyncRelayCommand<string>(LoadExampleAsync, name => IsWorkerConnected);
         ToggleRightPanelCommand = new RelayCommand(() => IsRightPanelVisible = !IsRightPanelVisible);
+        UndoCommand = new AsyncRelayCommand(UndoAsync, () => HasProject && IsWorkerConnected);
+        OpenLlmSettingsCommand = new RelayCommand(OpenLlmSettings);
+        RedetectLlmCommand = new AsyncRelayCommand(async () =>
+        {
+            LlmStatus = "LLM：偵測中…";
+            await DetectLlmAsync();
+        });
+        RedoCommand = new AsyncRelayCommand(RedoAsync, () => HasProject && IsWorkerConnected);
 
         // 歡迎訊息
         Messages.Add(ChatMessage.Assistant(
@@ -207,8 +219,63 @@ public class MainViewModel : INotifyPropertyChanged
         }
     }
 
+    /// <summary>
+    /// 開啟 LLM 設定檔（~/.opencad/settings.json）——不存在時先建立範本。
+    /// 修改後用「重新偵測 LLM」套用，不需重啟。
+    /// </summary>
+    private void OpenLlmSettings()
+    {
+        try
+        {
+            var path = Services.AppSettings.EnsureSettingsFile();
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = path,
+                UseShellExecute = true,
+            });
+            Messages.Add(ChatMessage.Assistant(
+                $"已開啟 LLM 設定檔：{path}\n\n" +
+                "設定範例（OpenAI-compatible，如 LiteLLM Gateway）：\n" +
+                "{\n  \"llm\": {\n    \"provider\": \"openai\",\n" +
+                "    \"base_url\": \"http://<gateway>:4000/v1\",\n" +
+                "    \"api_key\": \"sk-…\",\n    \"model\": \"coding-cloud\"\n  }\n}\n\n" +
+                "儲存後點「檔案 → 重新偵測 LLM」即可套用。"));
+        }
+        catch (Exception ex)
+        {
+            Messages.Add(ChatMessage.Error($"開啟設定檔失敗：{ex.Message}"));
+        }
+    }
+
     private async Task DetectLlmAsync()
     {
+        // 優先使用 ~/.opencad/settings.json 的設定（支援 LiteLLM Gateway 等
+        // OpenAI-compatible 端點）；未設定時自動偵測本機 Ollama
+        var settings = Services.AppSettings.Load().Llm;
+        var provider = settings.Provider.ToLowerInvariant();
+
+        if (provider == "none")
+        {
+            _llmProvider = null;
+            LlmStatus = "LLM：已停用（設定檔）";
+            return;
+        }
+
+        if (provider == "openai" || (provider == "auto" && !string.IsNullOrEmpty(settings.BaseUrl)))
+        {
+            var openai = new OpenAiCompatibleLlmProvider(settings.BaseUrl, settings.ApiKey, settings.Model);
+            if (await openai.CheckConnectivityAsync())
+            {
+                _llmProvider = openai;
+                var host = Uri.TryCreate(settings.BaseUrl, UriKind.Absolute, out var u) ? u.Host : settings.BaseUrl;
+                LlmStatus = $"LLM：{settings.Model}（{host}）已連線";
+                return;
+            }
+            _llmProvider = null;
+            LlmStatus = $"LLM：設定的端點無法連線（{settings.BaseUrl}）";
+            return;
+        }
+
         try
         {
             using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(2) };
@@ -251,6 +318,67 @@ public class MainViewModel : INotifyPropertyChanged
         catch (Exception ex)
         {
             Messages.Add(ChatMessage.Error($"建立專案失敗：{ex.Message}"));
+        }
+        finally { IsBusy = false; }
+    }
+
+    /// <summary>
+    /// 開啟現有專案（B1）。
+    /// </summary>
+    /// <summary>
+    /// 以專案 ID 開啟既有專案：載入 graph、重建、刷新特徵樹與 3D 顯示。
+    /// </summary>
+    private async Task OpenProjectByIdAsync(string projectId)
+    {
+        if (_worker == null) return;
+        try
+        {
+            IsBusy = true;
+            // 先確認專案存在
+            await _worker.GetProjectAsync(projectId);
+            _projectId = projectId;
+            RefreshCanExecute();
+            Messages.Add(ChatMessage.Assistant($"已開啟專案 {projectId}，重建中…"));
+            await RebuildAsync();
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "開啟專案失敗 {Pid}", projectId);
+            Messages.Add(ChatMessage.Error($"開啟專案失敗：{ex.Message}"));
+        }
+        finally { IsBusy = false; }
+    }
+
+    private async Task OpenProjectAsync()
+    {
+        if (_worker == null) return;
+        try
+        {
+            IsBusy = true;
+            var rawJson = await _worker.ListProjectsAsync();
+            var projects = JsonSerializer.Deserialize<JsonElement>(rawJson);
+
+            // 建立選擇清單文字
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine("可用的專案：");
+            if (projects.TryGetProperty("projects", out var projArr))
+            {
+                int idx = 1;
+                foreach (var p in projArr.EnumerateArray())
+                {
+                    var name = p.TryGetProperty("name", out var nEl) ? nEl.GetString() ?? "?" : "?";
+                    var count = p.TryGetProperty("feature_count", out var cEl) ? cEl.GetInt32() : 0;
+                    var pid = p.TryGetProperty("project_id", out var idEl) ? idEl.GetString() ?? "" : "";
+                    sb.AppendLine($"  {idx}. {name}（{count} 特徵）— {pid}");
+                    idx++;
+                }
+            }
+            sb.AppendLine("\n請在聊天框輸入專案 ID 以開啟。");
+            Messages.Add(ChatMessage.Assistant(sb.ToString()));
+        }
+        catch (Exception ex)
+        {
+            Messages.Add(ChatMessage.Error($"列出專案失敗：{ex.Message}"));
         }
         finally { IsBusy = false; }
     }
@@ -411,6 +539,13 @@ public class MainViewModel : INotifyPropertyChanged
         Messages.Add(ChatMessage.User(request));
         InputText = string.Empty;
 
+        // 輸入為專案 ID（GUID）時直接開啟該專案——配合「開啟專案」清單的操作方式
+        if (Guid.TryParse(request.Trim(), out _))
+        {
+            await OpenProjectByIdAsync(request.Trim());
+            return;
+        }
+
         if (_llmProvider == null)
         {
             Messages.Add(ChatMessage.Assistant(
@@ -429,24 +564,32 @@ public class MainViewModel : INotifyPropertyChanged
                 RefreshCanExecute();
             }
 
-            var context = new DesignContext
+            // 分支：已有特徵 → 語意修改流程（A1），否則 → 計畫建立流程
+            if (FeatureTree.Count > 0 && _worker != null && _projectId != null)
             {
-                UserRequest = request,
-                CurrentProjectId = _projectId,
-            };
-
-            var plan = await _llmProvider.CreatePlanAsync(context);
-
-            // 顯示計畫卡片
-            Messages.Add(ChatMessage.FromPlan(plan,
-                new RelayCommand(() => _ = ApplyPlanAsync(plan)),
-                new RelayCommand(() => { })));
-
-            // 如果缺少資訊，提示使用者
-            if (plan.MissingInfo.Count > 0)
+                await SendUpdateAsync(request);
+            }
+            else
             {
-                Messages.Add(ChatMessage.Assistant(
-                    "缺少資訊：\n" + string.Join("\n", plan.MissingInfo)));
+                var context = new DesignContext
+                {
+                    UserRequest = request,
+                    CurrentProjectId = _projectId,
+                };
+
+                var plan = await _llmProvider.CreatePlanAsync(context);
+
+                // 顯示計畫卡片
+                Messages.Add(ChatMessage.FromPlan(plan,
+                    new RelayCommand(() => _ = ApplyPlanAsync(plan)),
+                    new RelayCommand(() => { })));
+
+                // 如果缺少資訊，提示使用者
+                if (plan.MissingInfo.Count > 0)
+                {
+                    Messages.Add(ChatMessage.Assistant(
+                        "缺少資訊：\n" + string.Join("\n", plan.MissingInfo)));
+                }
             }
         }
         catch (Exception ex)
@@ -526,6 +669,179 @@ public class MainViewModel : INotifyPropertyChanged
         finally { IsBusy = false; }
     }
 
+    /// <summary>
+    /// 語意修改流程（A1）：取得特徵圖 → LLM 產生 update 命令 → 顯示差異卡片（A2）→ 使用者確認後套用。
+    /// </summary>
+    private async Task SendUpdateAsync(string userRequest)
+    {
+        if (_worker == null || _projectId == null || _llmProvider == null) return;
+
+        try
+        {
+            // 取得目前特徵圖 JSON
+            var featureGraphJson = await _worker.GetProjectAsync(_projectId);
+
+            // LLM 產生 update 命令
+            var command = await _llmProvider.CreateUpdateCommandAsync(userRequest, featureGraphJson);
+
+            if (string.IsNullOrEmpty(command.TargetFeatureId))
+            {
+                Messages.Add(ChatMessage.Assistant("無法判斷要修改的特徵，請更具體描述。"));
+                return;
+            }
+
+            // 取得修改前的特徵資料（用於 diff）
+            var beforeParams = ExtractFeatureParams(featureGraphJson, command.TargetFeatureId);
+
+            // 建構修改後的參數預覽
+            var afterParams = new Dictionary<string, object>(beforeParams);
+            if (command.Parameters != null)
+            {
+                foreach (var kvp in command.Parameters)
+                    afterParams[kvp.Key] = kvp.Value;
+            }
+
+            var diff = new ModificationDiff
+            {
+                FeatureId = command.TargetFeatureId,
+                Before = beforeParams,
+                After = afterParams,
+                Description = command.Reasoning,
+            };
+
+            // 顯示差異卡片（A2）
+            Messages.Add(ChatMessage.FromDiff(diff,
+                new RelayCommand(() => _ = ApplyDiffAsync(command)),
+                new RelayCommand(() => { })));
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "語意修改流程失敗");
+            Messages.Add(ChatMessage.Error($"修改流程失敗：{ex.Message}"));
+        }
+    }
+
+    /// <summary>
+    /// 套用差異命令（A2 確認後）。
+    /// </summary>
+    private async Task ApplyDiffAsync(CadCommand command)
+    {
+        if (_worker == null || _projectId == null) return;
+        try
+        {
+            IsBusy = true;
+            var result = await _worker.ApplyCommandAsync(_projectId, command);
+            if (result.Status == "error")
+            {
+                Messages.Add(ChatMessage.Error(
+                    $"修改失敗：{result.ErrorCode} — {result.EngineMessage}"));
+                return;
+            }
+
+            Messages.Add(ChatMessage.Assistant("修改已套用，開始重建…"));
+            await RebuildAsync();
+        }
+        catch (Exception ex)
+        {
+            Messages.Add(ChatMessage.Error($"套用修改失敗：{ex.Message}"));
+        }
+        finally { IsBusy = false; }
+    }
+
+    /// <summary>
+    /// 復原（A4）。
+    /// </summary>
+    private async Task UndoAsync()
+    {
+        if (_worker == null || _projectId == null) return;
+        try
+        {
+            IsBusy = true;
+            var success = await _worker.UndoAsync(_projectId);
+            if (success)
+            {
+                Messages.Add(ChatMessage.Assistant("已復原。"));
+                await RebuildAsync();
+            }
+            else
+            {
+                Messages.Add(ChatMessage.Assistant("已是最早版本，無法復原。"));
+            }
+        }
+        catch (Exception ex)
+        {
+            Messages.Add(ChatMessage.Error($"復原失敗：{ex.Message}"));
+        }
+        finally { IsBusy = false; }
+    }
+
+    /// <summary>
+    /// 重做（A4）。
+    /// </summary>
+    private async Task RedoAsync()
+    {
+        if (_worker == null || _projectId == null) return;
+        try
+        {
+            IsBusy = true;
+            var success = await _worker.RedoAsync(_projectId);
+            if (success)
+            {
+                Messages.Add(ChatMessage.Assistant("已重做。"));
+                await RebuildAsync();
+            }
+            else
+            {
+                Messages.Add(ChatMessage.Assistant("已是最新版本，無法重做。"));
+            }
+        }
+        catch (Exception ex)
+        {
+            Messages.Add(ChatMessage.Error($"重做失敗：{ex.Message}"));
+        }
+        finally { IsBusy = false; }
+    }
+
+    /// <summary>
+    /// 從特徵圖 JSON 中取出指定特徵的參數（用於 diff before）。
+    /// </summary>
+    private static Dictionary<string, object> ExtractFeatureParams(string featureGraphJson, string featureId)
+    {
+        var result = new Dictionary<string, object>();
+        try
+        {
+            var doc = JsonDocument.Parse(featureGraphJson);
+            if (doc.RootElement.TryGetProperty("features", out var featuresEl))
+            {
+                JsonElement? targetFeat = null;
+                if (featuresEl.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var f in featuresEl.EnumerateArray())
+                    {
+                        if (f.TryGetProperty("feature_id", out var idEl) && idEl.GetString() == featureId)
+                        {
+                            targetFeat = f;
+                            break;
+                        }
+                    }
+                }
+                else if (featuresEl.ValueKind == JsonValueKind.Object)
+                {
+                    if (featuresEl.TryGetProperty(featureId, out var f))
+                        targetFeat = f;
+                }
+
+                if (targetFeat.HasValue && targetFeat.Value.TryGetProperty("parameters", out var paramsEl))
+                {
+                    foreach (var p in paramsEl.EnumerateObject())
+                        result[p.Name] = FormatJsonValue(p.Value);
+                }
+            }
+        }
+        catch { }
+        return result;
+    }
+
     private async Task UpdateFeatureTreeAsync()
     {
         if (_worker == null || _projectId == null) return;
@@ -537,6 +853,13 @@ public class MainViewModel : INotifyPropertyChanged
 
             if (projectInfo.TryGetProperty("features", out var featuresEl))
             {
+                // 新版 graph 格式為 {schema_version, features: [...]}——先解開包裝
+                if (featuresEl.ValueKind == JsonValueKind.Object &&
+                    featuresEl.TryGetProperty("features", out var innerEl))
+                {
+                    featuresEl = innerEl;
+                }
+
                 // features 可能是 dict 或 array 格式
                 if (featuresEl.ValueKind == JsonValueKind.Array)
                 {
@@ -574,19 +897,33 @@ public class MainViewModel : INotifyPropertyChanged
                 FeatureType = type,
             };
 
-            // 抽出實際參數供參數面板顯示
-            node.Parameters.Add(new ParameterItem { Key = "feature_id", Value = fid });
-            node.Parameters.Add(new ParameterItem { Key = "type", Value = type });
+            // 抽出實際參數供參數面板顯示。
+            // 只有純量數值參數可編輯；feature_id/type/input/standard_parts/陣列唯讀
+            static ParameterItem ReadOnlyItem(string key, string value) =>
+                new() { Key = key, Value = value, OriginalValue = value, IsEditable = false };
+
+            node.Parameters.Add(ReadOnlyItem("feature_id", fid));
+            node.Parameters.Add(ReadOnlyItem("type", type));
             if (featEl.TryGetProperty("input", out var inEl) && inEl.ValueKind == JsonValueKind.String)
-                node.Parameters.Add(new ParameterItem { Key = "input", Value = inEl.GetString() ?? "" });
+                node.Parameters.Add(ReadOnlyItem("input", inEl.GetString() ?? ""));
             if (featEl.TryGetProperty("parameters", out var paramsEl) && paramsEl.ValueKind == JsonValueKind.Object)
             {
                 foreach (var p in paramsEl.EnumerateObject())
-                    node.Parameters.Add(new ParameterItem { Key = p.Name, Value = FormatJsonValue(p.Value) });
+                {
+                    var text = FormatJsonValue(p.Value);
+                    var editable = double.TryParse(text, out _);
+                    node.Parameters.Add(new ParameterItem
+                    {
+                        Key = p.Name,
+                        Value = text,
+                        OriginalValue = text,
+                        IsEditable = editable,
+                    });
+                }
             }
             if (featEl.TryGetProperty("standard_parts", out var spEl) &&
                 spEl.ValueKind == JsonValueKind.Object && spEl.EnumerateObject().Any())
-                node.Parameters.Add(new ParameterItem { Key = "standard_parts", Value = FormatJsonValue(spEl) });
+                node.Parameters.Add(ReadOnlyItem("standard_parts", FormatJsonValue(spEl)));
 
             return node;
         }
@@ -606,11 +943,64 @@ public class MainViewModel : INotifyPropertyChanged
         SelectedFeatureParameters.Clear();
         if (_selectedFeature == null) return;
 
+        var featureId = _selectedFeature.FeatureId;
         foreach (var p in _selectedFeature.Parameters)
+        {
+            if (p.IsEditable)
+                p.ApplyCommand = new AsyncRelayCommand(() => ApplyParameterEditAsync(featureId, p));
             SelectedFeatureParameters.Add(p);
+        }
 
         // 高亮對應 mesh
-        ViewerScriptRequested?.Invoke($"highlightByName('{_selectedFeature.FeatureId}');");
+        ViewerScriptRequested?.Invoke($"highlightByName('{featureId}');");
+    }
+
+    /// <summary>
+    /// 套用參數面板的單一參數編輯——與 LLM 走完全相同的 update_feature 命令路徑。
+    /// </summary>
+    private async Task ApplyParameterEditAsync(string featureId, ParameterItem item)
+    {
+        if (_worker == null || _projectId == null) return;
+
+        // 數值驗證：非數字或長度類負值在 UI 端先擋
+        if (!double.TryParse(item.Value, out var number))
+        {
+            Messages.Add(ChatMessage.Error($"參數 {item.Key} 必須是數值：「{item.Value}」無效。"));
+            return;
+        }
+        if (number <= 0 && item.Key is "length" or "width" or "height" or "depth" or "diameter" or "radius" or "thickness")
+        {
+            Messages.Add(ChatMessage.Error($"參數 {item.Key} 必須大於 0。"));
+            return;
+        }
+
+        try
+        {
+            IsBusy = true;
+            var command = new CadCommand
+            {
+                Action = "update_feature",
+                TargetFeatureId = featureId,
+                Parameters = new Dictionary<string, object> { [item.Key] = number },
+            };
+            var result = await _worker.ApplyCommandAsync(_projectId, command);
+            if (result.Status == "error")
+            {
+                Messages.Add(ChatMessage.Error(
+                    $"參數更新失敗：{result.ErrorCode} — {result.EngineMessage}"));
+                return;
+            }
+
+            item.OriginalValue = item.Value;
+            Messages.Add(ChatMessage.Assistant($"已將 {featureId}.{item.Key} 改為 {number}，重建中…"));
+            await RebuildAsync();
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "參數編輯套用失敗");
+            Messages.Add(ChatMessage.Error($"參數更新失敗：{ex.Message}"));
+        }
+        finally { IsBusy = false; }
     }
 
     private void SetView(string? view)
@@ -641,6 +1031,8 @@ public class MainViewModel : INotifyPropertyChanged
         ((AsyncRelayCommand)RebuildCommand).RaiseCanExecuteChanged();
         ((AsyncRelayCommand<string>)ExportCommand).RaiseCanExecuteChanged();
         ((AsyncRelayCommand<string>)LoadExampleCommand).RaiseCanExecuteChanged();
+        ((AsyncRelayCommand)UndoCommand).RaiseCanExecuteChanged();
+        ((AsyncRelayCommand)RedoCommand).RaiseCanExecuteChanged();
         OnPropertyChanged(nameof(HasProject));
     }
 

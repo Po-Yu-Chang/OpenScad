@@ -198,6 +198,34 @@ public class CadWorkerClient : ICadWorker
     }
 
     /// <summary>
+    /// 取得所有專案列表。
+    /// </summary>
+    public async Task<string> ListProjectsAsync()
+    {
+        var response = await _httpClient.GetAsync("/api/projects");
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadAsStringAsync();
+    }
+
+    /// <summary>
+    /// 復原到上一版。
+    /// </summary>
+    public async Task<bool> UndoAsync(string projectId)
+    {
+        var response = await _httpClient.PostAsync($"/api/projects/{projectId}/undo", null);
+        return response.IsSuccessStatusCode;
+    }
+
+    /// <summary>
+    /// 重做到下一版。
+    /// </summary>
+    public async Task<bool> RedoAsync(string projectId)
+    {
+        var response = await _httpClient.PostAsync($"/api/projects/{projectId}/redo", null);
+        return response.IsSuccessStatusCode;
+    }
+
+    /// <summary>
     /// 從 Token 檔案取得工作階段 Token。
     /// Worker 啟動時將 Token 寫入 OPENCAD_TOKEN_FILE 指定的檔案。
     /// </summary>

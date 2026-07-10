@@ -159,16 +159,18 @@ class GeometryValidator:
                     f"實際 {report.solid_count}"
                 )
 
-        # 預期 Bounding Box
+        # 預期 Bounding Box——X/Y/Z 三軸皆比對
         if "expected_bounding_box" in expected:
             bb_exp = expected["expected_bounding_box"]
             if "max" in bb_exp and bb_exp["max"]:
-                exp_x = bb_exp["max"][0] - bb_exp["min"][0] if "min" in bb_exp else bb_exp["max"][0]
-                if abs(report.size_x - exp_x) > 0.05:
-                    report.is_valid = False
-                    report.errors.append(
-                        f"X 尺寸不符：預期 {exp_x}，實際 {report.size_x:.4f}"
-                    )
+                actual = [report.size_x, report.size_y, report.size_z]
+                for axis, name in enumerate(("X", "Y", "Z")):
+                    exp_v = bb_exp["max"][axis] - (bb_exp["min"][axis] if "min" in bb_exp and bb_exp["min"] else 0)
+                    if abs(actual[axis] - exp_v) > 0.05:
+                        report.is_valid = False
+                        report.errors.append(
+                            f"{name} 尺寸不符：預期 {exp_v}，實際 {actual[axis]:.4f}"
+                        )
 
         # 預期孔數
         if "expected_hole_count" in expected:
