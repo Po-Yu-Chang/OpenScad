@@ -46,19 +46,22 @@
                 <!-- 新增專案 -->
                 <Button Grid.Column="2" Classes="tool" Content="新增專案" Command="{Binding NewProjectCommand}" Margin="8,0,0,0" />
 
+                <!-- 新增草圖 -->
+                <Button Grid.Column="3" Classes="tool" Content="✏ 草圖" Command="{Binding NewSketchCommand}" Margin="4,0,0,0" ToolTip.Tip="建立新草圖並進入編輯" />
+
                 <!-- 重建 -->
-                <Button Grid.Column="3" Classes="primary" Content="重建" Command="{Binding RebuildCommand}" Margin="8,0,0,0" />
+                <Button Grid.Column="4" Classes="primary" Content="重建" Command="{Binding RebuildCommand}" Margin="8,0,0,0" />
 
                 <!-- 復原/重做 -->
-                <Button Grid.Column="4" Classes="tool" Content="↶ 復原" Command="{Binding UndoCommand}" Margin="8,0,0,0" ToolTip.Tip="Ctrl+Z" />
-                <Button Grid.Column="5" Classes="tool" Content="↷ 重做" Command="{Binding RedoCommand}" Margin="4,0,0,0" ToolTip.Tip="Ctrl+Y" />
+                <Button Grid.Column="5" Classes="tool" Content="↶ 復原" Command="{Binding UndoCommand}" Margin="8,0,0,0" ToolTip.Tip="Ctrl+Z" />
+                <Button Grid.Column="6" Classes="tool" Content="↷ 重做" Command="{Binding RedoCommand}" Margin="4,0,0,0" ToolTip.Tip="Ctrl+Y" />
 
                 <!-- 右側動作 -->
-                <Button Grid.Column="7" Classes="tool" Content="匯出 STEP" Command="{Binding ExportCommand}" CommandParameter="step" Margin="0,0,8,0" />
-                <Button Grid.Column="8" Classes="tool" Content="匯出 STL" Command="{Binding ExportCommand}" CommandParameter="stl" Margin="0,0,8,0" />
+                <Button Grid.Column="8" Classes="tool" Content="匯出 STEP" Command="{Binding ExportCommand}" CommandParameter="step" Margin="0,0,8,0" />
+                <Button Grid.Column="9" Classes="tool" Content="匯出 STL" Command="{Binding ExportCommand}" CommandParameter="stl" Margin="0,0,8,0" />
 
                 <!-- 收合右欄 -->
-                <Button Grid.Column="10" Classes="tool" Content="⚙" Command="{Binding ToggleRightPanelCommand}" ToolTip.Tip="切換對話窗格" />
+                <Button Grid.Column="10" Classes="tool" Content="⚙" Command="{Binding ToggleRightPanelCommand}" ToolTip.Tip="開啟／收合對話窗格（輸入框在此欄）" />
             </Grid>
         </Border>
 
@@ -74,9 +77,19 @@
                                   SelectedItem="{Binding SelectedFeature}"
                                   Margin="8,0,8,8"
                                   Background="Transparent">
+                            <TreeView.ContextMenu>
+                                <ContextMenu>
+                                    <MenuItem Header="✏ 編輯草圖" Command="{Binding EditSketchCommand}" IsVisible="{Binding CanEditSketch}" />
+                                    <MenuItem Header="📝 編輯參數" Command="{Binding EditParametersCommand}" />
+                                    <MenuItem Header="🗑 刪除" Command="{Binding DeleteFeatureCommand}" />
+                                </ContextMenu>
+                            </TreeView.ContextMenu>
                             <TreeView.ItemTemplate>
                                 <TreeDataTemplate ItemsSource="{Binding Children}">
-                                    <TextBlock Text="{Binding DisplayName}" Foreground="{DynamicResource TextBrush}" />
+                                    <StackPanel Orientation="Horizontal" Spacing="4">
+                                        <TextBlock Text="{Binding TypeIcon}" Foreground="{DynamicResource AccentBrush}" FontSize="14" />
+                                        <TextBlock Text="{Binding DisplayName}" Foreground="{DynamicResource TextBrush}" />
+                                    </StackPanel>
                                 </TreeDataTemplate>
                             </TreeView.ItemTemplate>
                         </TreeView>
@@ -86,9 +99,12 @@
                 <GridSplitter Grid.Row="1" Background="{DynamicResource BorderBrush}" ResizeDirection="Rows" />
 
                 <Border Grid.Row="2" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,1,0">
-                    <Grid RowDefinitions="Auto,*">
+                    <Grid RowDefinitions="Auto,Auto,*">
                         <TextBlock Grid.Row="0" Text="參數面板" FontWeight="Bold" Foreground="{DynamicResource TextBrush}" Margin="12,8,0,4" />
-                        <ScrollViewer Grid.Row="1" Padding="8">
+                        <Button Grid.Row="1" Classes="tool" Content="✏ 編輯草圖" Command="{Binding EditSketchCommand}"
+                                Margin="12,0,12,4" IsVisible="{Binding CanEditSketch}"
+                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                        <ScrollViewer Grid.Row="2" Padding="8">
                             <ItemsControl ItemsSource="{Binding SelectedFeatureParameters}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
@@ -118,47 +134,6 @@
                 <!-- WebView -->
                 <WebView x:Name="PART_Viewer" />
 
-                <!-- 載入中提示 -->
-                <TextBlock Text="3D 視窗載入中…" Foreground="{DynamicResource OverlayBrush}"
-                           HorizontalAlignment="Center" VerticalAlignment="Center"
-                           IsVisible="{Binding !HasModel}" />
-
-                <!-- 視角懸浮按鈕組（右上角） -->
-                <Border HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,12,12,0"
-                        Background="{DynamicResource OverlayBgBrush}" CornerRadius="8" Padding="4">
-                    <StackPanel Orientation="Vertical">
-                        <Button Classes="view-btn" Content="等角" Command="{Binding SetViewCommand}" CommandParameter="iso" Margin="0,2" />
-                        <Button Classes="view-btn" Content="正視" Command="{Binding SetViewCommand}" CommandParameter="front" Margin="0,2" />
-                        <Button Classes="view-btn" Content="俯視" Command="{Binding SetViewCommand}" CommandParameter="top" Margin="0,2" />
-                        <Button Classes="view-btn" Content="右視" Command="{Binding SetViewCommand}" CommandParameter="right" Margin="0,2" />
-                    </StackPanel>
-                </Border>
-
-                <!-- 忙碌指示器（右下角） -->
-                <Border HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,12,12"
-                        Background="{DynamicResource OverlayBgBrush}" CornerRadius="8" Padding="8"
-                        IsVisible="{Binding IsBusy}">
-                    <StackPanel Orientation="Horizontal" Spacing="6">
-                        <TextBlock Text="重建中…" Foreground="{DynamicResource TextBrush}" FontSize="12" />
-                        <ProgressBar IsIndeterminate="True" Width="40" Height="12" />
-                    </StackPanel>
-                </Border>
-
-                <!-- 懸浮提示輸入列（底部置中） -->
-                <Border HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,24"
-                        Background="{DynamicResource OverlayBgBrush}" CornerRadius="12" Padding="4"
-                        MinWidth="400" MaxWidth="600">
-                    <Grid ColumnDefinitions="*,Auto">
-                        <TextBox x:Name="PART_PromptInput" Grid.Column="0" Text="{Binding InputText}" Watermark="描述設計需求…"
-                                 Background="Transparent" BorderThickness="0"
-                                 Foreground="{DynamicResource TextBrush}"
-                                 AcceptsReturn="True" MinHeight="36"
-                                 CaretBrush="{DynamicResource AccentBrush}"
-                                 TextWrapping="Wrap" />
-                        <Button Grid.Column="1" Classes="primary" Content="送出"
-                                Command="{Binding SendCommand}" VerticalAlignment="Center" Margin="4,0,0,0" />
-                    </Grid>
-                </Border>
             </Grid>
 
             <!-- 右欄：對話歷史（可收合） -->
@@ -168,7 +143,7 @@
             <Border Grid.Column="4" Background="{DynamicResource MantleBrush}"
                     BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1,0,0,0"
                     IsVisible="{Binding IsRightPanelVisible}">
-                <Grid RowDefinitions="*,Auto">
+                <Grid RowDefinitions="*,Auto,Auto">
                     <!-- 對話歷史 -->
                     <ScrollViewer Grid.Row="0" Padding="8" x:Name="PART_ChatScroll">
                         <ItemsControl ItemsSource="{Binding Messages}">
@@ -273,7 +248,19 @@
 
                     <!-- LLM 狀態 -->
                     <TextBlock Grid.Row="1" Text="{Binding LlmStatus}" Foreground="{DynamicResource SubtextBrush}"
-                               FontSize="11" Margin="8,4,8,8" />
+                               FontSize="11" Margin="8,4,8,4" />
+
+                    <!-- 輸入框（底部） -->
+                    <Grid Grid.Row="2" ColumnDefinitions="*,Auto" Margin="8,0,8,8">
+                        <TextBox x:Name="PART_PromptInput" Grid.Column="0" Text="{Binding InputText}" Watermark="描述設計需求…"
+                                 Background="{DynamicResource BaseBrush}" BorderBrush="{DynamicResource BorderBrush}"
+                                 Foreground="{DynamicResource TextBrush}"
+                                 AcceptsReturn="True" MinHeight="36" MaxHeight="100"
+                                 CaretBrush="{DynamicResource AccentBrush}"
+                                 TextWrapping="Wrap" Padding="6" />
+                        <Button Grid.Column="1" Classes="primary" Content="送出"
+                                Command="{Binding SendCommand}" VerticalAlignment="Center" Margin="4,0,0,0" />
+                    </Grid>
                 </Grid>
             </Border>
         </Grid>
@@ -289,6 +276,8 @@
                            IsVisible="{Binding !IsWorkerConnected}" />
                 <TextBlock Foreground="{DynamicResource SubtextBrush}" Text="{Binding LlmStatus}" FontFamily="Consolas" FontSize="11" />
                 <TextBlock Foreground="{DynamicResource SubtextBrush}" Text="{Binding ModelInfoText}" FontFamily="Consolas" FontSize="11" />
+                <TextBlock Text="⏳ 重建中…" Foreground="{DynamicResource WarningBrush}" FontFamily="Consolas" FontSize="11"
+                           IsVisible="{Binding IsBusy}" />
             </StackPanel>
         </Border>
     </Grid>

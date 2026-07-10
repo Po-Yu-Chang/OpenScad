@@ -97,6 +97,52 @@ class TestUpdateFeature:
             fg.update_feature("nope", {"x": 1})
 
 
+class TestSketchEntities:
+    def test_update_sketch_entities_round_trip(self):
+        fg = FeatureGraph()
+        fg.add_feature(_make_feature("sk1", "Sketch1", "sketch"))
+        entities = [
+            {"type": "rectangle", "x": 0, "y": 0, "width": 40, "height": 20},
+            {"type": "circle", "cx": 10, "cy": 10, "radius": 5},
+        ]
+        fg.update_feature("sk1", sketch_entities=entities)
+        feat = fg.get_feature("sk1")
+        assert feat.sketch_entities == entities
+        # to_dict / from_dict round-trip
+        d = fg.to_dict()
+        fg2 = FeatureGraph.from_dict(d)
+        assert fg2.get_feature("sk1").sketch_entities == entities
+
+    def test_update_sketch_entities_full_replace_not_merge(self):
+        fg = FeatureGraph()
+        fg.add_feature(_make_feature("sk1", "Sketch1", "sketch"))
+        old = [{"type": "rectangle", "x": 0, "y": 0, "width": 10, "height": 10}]
+        fg.update_feature("sk1", sketch_entities=old)
+        assert fg.get_feature("sk1").sketch_entities == old
+        new = [{"type": "circle", "cx": 0, "cy": 0, "radius": 3}]
+        fg.update_feature("sk1", sketch_entities=new)
+        assert fg.get_feature("sk1").sketch_entities == new
+        assert old not in fg.get_feature("sk1").sketch_entities
+
+    def test_update_sketch_entities_none_does_not_clear(self):
+        fg = FeatureGraph()
+        fg.add_feature(_make_feature("sk1", "Sketch1", "sketch"))
+        entities = [{"type": "circle", "cx": 0, "cy": 0, "radius": 5}]
+        fg.update_feature("sk1", sketch_entities=entities)
+        # Passing None should NOT wipe existing entities
+        fg.update_feature("sk1", parameters={"foo": 1})
+        assert fg.get_feature("sk1").sketch_entities == entities
+
+    def test_update_sketch_entities_marks_downstream_pending(self):
+        fg = FeatureGraph()
+        fg.add_feature(_make_feature("sk1", "Sketch1", "sketch"))
+        fg.add_feature(_make_feature("pad1", "Pad1", "pad", references=["sk1"]))
+        fg.get_feature("pad1").rebuild_status = RebuildStatus.SUCCESS
+        fg.update_feature("sk1", sketch_entities=[{"type": "rectangle"}])
+        assert fg.get_feature("sk1").rebuild_status == RebuildStatus.PENDING
+        assert fg.get_feature("pad1").rebuild_status == RebuildStatus.PENDING
+
+
 class TestSerialization:
     def test_round_trip(self):
         fg = FeatureGraph()

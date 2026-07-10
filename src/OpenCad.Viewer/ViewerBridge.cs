@@ -17,9 +17,16 @@ public class ViewerBridge
         Loaded,
         Selection,
         Error,
+        SketchCommitted,
+        SketchCancelled,
     }
 
-    public record ViewerMessage(MessageType Type, string? ObjectId = null, string? ErrorMessage = null);
+    public record ViewerMessage(
+        MessageType Type,
+        string? ObjectId = null,
+        string? ErrorMessage = null,
+        string? FeatureId = null,
+        string? EntitiesJson = null);
 
     /// <summary>
     /// 解析來自 WebView 的訊息。
@@ -36,6 +43,8 @@ public class ViewerBridge
                 "loaded" => MessageType.Loaded,
                 "selection" => MessageType.Selection,
                 "error" => MessageType.Error,
+                "sketch_committed" => MessageType.SketchCommitted,
+                "sketch_cancelled" => MessageType.SketchCancelled,
                 _ => (MessageType?)null,
             };
 
@@ -49,7 +58,15 @@ public class ViewerBridge
                 ? element.TryGetProperty("message", out var msg) ? msg.GetString() : null
                 : null;
 
-            return new ViewerMessage(type.Value, objectId, errorMsg);
+            string? featureId = type == MessageType.SketchCommitted
+                ? element.TryGetProperty("feature_id", out var fid) ? fid.GetString() : null
+                : null;
+
+            string? entitiesJson = type == MessageType.SketchCommitted
+                ? element.TryGetProperty("entities", out var ents) ? ents.GetRawText() : null
+                : null;
+
+            return new ViewerMessage(type.Value, objectId, errorMsg, featureId, entitiesJson);
         }
         catch
         {
@@ -74,4 +91,16 @@ public class ViewerBridge
     /// </summary>
     public static string BuildClearHighlightScript() =>
         "clearHighlight();";
+
+    /// <summary>
+    /// 建構進入草圖模式的 JavaScript 呼叫字串。
+    /// </summary>
+    public static string BuildEnterSketchScript(string featureId, string entitiesJson) =>
+        $"enterSketchMode('{featureId}', {entitiesJson});";
+
+    /// <summary>
+    /// 建構離開草圖模式的 JavaScript 呼叫字串。
+    /// </summary>
+    public static string BuildExitSketchScript() =>
+        "exitSketchMode();";
 }

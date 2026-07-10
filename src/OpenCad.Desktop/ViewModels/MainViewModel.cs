@@ -111,6 +111,13 @@ public class MainViewModel : INotifyPropertyChanged
 
     public bool HasProject => !string.IsNullOrEmpty(_projectId);
 
+    private bool _canEditSketch;
+    public bool CanEditSketch
+    {
+        get => _canEditSketch;
+        set { _canEditSketch = value; OnPropertyChanged(); }
+    }
+
     public FeatureNode? SelectedFeature
     {
         get => _selectedFeature;
@@ -135,6 +142,10 @@ public class MainViewModel : INotifyPropertyChanged
     public ICommand OpenLlmSettingsCommand { get; }
     public ICommand RedetectLlmCommand { get; }
     public ICommand RedoCommand { get; }
+    public ICommand NewSketchCommand { get; }
+    public ICommand EditSketchCommand { get; }
+    public ICommand DeleteFeatureCommand { get; }
+    public ICommand EditParametersCommand { get; }
 
     /// <summary>
     /// 當 ViewModel 需要在 3D 視窗中執行 JavaScript 時觸發。
@@ -163,6 +174,10 @@ public class MainViewModel : INotifyPropertyChanged
             await DetectLlmAsync();
         });
         RedoCommand = new AsyncRelayCommand(RedoAsync, () => HasProject && IsWorkerConnected);
+        NewSketchCommand = new AsyncRelayCommand(NewSketchAsync, () => IsWorkerConnected);
+        EditSketchCommand = new AsyncRelayCommand(EditSketchAsync, () => CanEditSketch && IsWorkerConnected);
+        DeleteFeatureCommand = new AsyncRelayCommand(DeleteFeatureAsync, () => _selectedFeature != null && IsWorkerConnected);
+        EditParametersCommand = new RelayCommand(EditParameters, () => _selectedFeature != null);
 
         // 歡迎訊息
         Messages.Add(ChatMessage.Assistant(
@@ -803,6 +818,213 @@ public class MainViewModel : INotifyPropertyChanged
     }
 
     /// <summary>
+    /// 新建草圖並進入編輯模式（§2.2 入口 2）。
+    /// </summary>
+    private async Task NewSketchAsync()
+    {
+        if (_worker == null) return;
+        try
+        {
+            IsBusy = true;
+
+            if (_projectId == null)
+            {
+                _projectId = await _worker.CreateProjectAsync("AI 建模");
+                RefreshCanExecute();
+            }
+
+            // 產生 sketch_N ID
+            var sketchId = $"sketch_{FeatureTree.Count + 1}";
+            var command = new CadCommand
+            {
+                Action = "create_feature",
+                Feature = new Feature
+                {
+                    FeatureId = sketchId,
+                    Type = FeatureType.Sketch,
+                    Name = $"草圖 {FeatureTree.Count + 1}",
+                    Parameters = new(),
+                    SketchEntities = new(),
+                },
+            };
+
+            var result = await _worker.ApplyCommandAsync(_projectId, command);
+            if (result.Status == "error")
+            {
+                Messages.Add(ChatMessage.Error($"建立草圖失敗：{result.ErrorCode} — {result.EngineMessage}"));
+                return;
+            }
+
+            await UpdateFeatureTreeAsync();
+            Messages.Add(ChatMessage.Assistant($"已建立空草圖「{sketchId}」，進入編輯模式…"));
+
+            // 進入草圖編輯模式
+            EnterSketchEditor(sketchId, "[]");
+        }
+        catch (Exception ex)
+        {
+            Messages.Add(ChatMessage.Error($"建立草圖失敗：{ex.Message}"));
+        }
+        finally { IsBusy = false; }
+    }
+
+    /// <summary>
+    /// 編輯既有草圖（§2.2 入口 1）。
+    /// </summary>
+    private async Task EditSketchAsync()
+    {
+        if (_worker == null || _projectId == null || _selectedFeature == null) return;
+        try
+        {
+            IsBusy = true;
+
+            // 從 Worker 取得特徵圖，取出 sketch_entities
+            var rawJson = await _worker.GetProjectAsync(_projectId);
+            var projectInfo = JsonSerializer.Deserialize<JsonElement>(rawJson);
+            string entitiesJson = "[]";
+
+            if (projectInfo.TryGetProperty("features", out var featuresEl))
+            {
+                JsonElement? targetFeat = null;
+                if (featuresEl.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var f in featuresEl.EnumerateArray())
+                    {
+                        if (f.TryGetProperty("feature_id", out var idEl) &&
+                            idEl.GetString() == _selectedFeature.FeatureId)
+                        {
+                            targetFeat = f;
+                            break;
+                        }
+                    }
+                }
+                else if (featuresEl.ValueKind == JsonValueKind.Object)
+                {
+                    if (featuresEl.TryGetProperty(_selectedFeature.FeatureId, out var f))
+                        targetFeat = f;
+                }
+
+                if (targetFeat.HasValue &&
+                    targetFeat.Value.TryGetProperty("sketch_entities", out var seEl))
+                {
+                    entitiesJson = seEl.GetRawText();
+                }
+            }
+
+            EnterSketchEditor(_selectedFeature.FeatureId, entitiesJson);
+        }
+        catch (Exception ex)
+        {
+            Messages.Add(ChatMessage.Error($"進入草圖編輯失敗：{ex.Message}"));
+        }
+        finally { IsBusy = false; }
+    }
+
+    /// <summary>
+    /// 送出 enterSketchMode JS 進入草圖編輯器。
+    /// </summary>
+    private void EnterSketchEditor(string featureId, string entitiesJson)
+    {
+        ViewerScriptRequested?.Invoke(ViewerBridge.BuildEnterSketchScript(featureId, entitiesJson));
+    }
+
+    /// <summary>
+    /// 收到 viewer 的 sketch_committed 訊息後提交草圖變更（§2.4）。
+    /// </summary>
+    public async Task CommitSketchAsync(string featureId, string entitiesJson)
+    {
+        if (_worker == null || _projectId == null) return;
+        try
+        {
+            IsBusy = true;
+
+            var entities = JsonSerializer.Deserialize<List<Dictionary<string, object>>>(entitiesJson)
+                ?? new List<Dictionary<string, object>>();
+
+            var command = new CadCommand
+            {
+                Action = "update_feature",
+                TargetFeatureId = featureId,
+                SketchEntities = entities,
+            };
+
+            var result = await _worker.ApplyCommandAsync(_projectId, command);
+            if (result.Status == "error")
+            {
+                Messages.Add(ChatMessage.Error($"草圖更新失敗：{result.ErrorCode} — {result.EngineMessage}"));
+                return;
+            }
+
+            Messages.Add(ChatMessage.Assistant("草圖已更新，開始重建…"));
+            await RebuildAsync();
+        }
+        catch (Exception ex)
+        {
+            Messages.Add(ChatMessage.Error($"草圖提交失敗：{ex.Message}"));
+        }
+        finally { IsBusy = false; }
+    }
+
+    /// <summary>
+    /// 取消草圖編輯——只需退出 viewer 草圖模式。
+    /// </summary>
+    public void CancelSketch()
+    {
+        ViewerScriptRequested?.Invoke(ViewerBridge.BuildExitSketchScript());
+    }
+
+    /// <summary>
+    /// 刪除目前選取的特徵。
+    /// </summary>
+    private async Task DeleteFeatureAsync()
+    {
+        if (_selectedFeature == null || _worker == null || _projectId == null) return;
+
+        var featureId = _selectedFeature.FeatureId;
+        IsBusy = true;
+        try
+        {
+            var command = new CadCommand
+            {
+                Action = "delete_feature",
+                TargetFeatureId = featureId,
+            };
+            var result = await _worker.ApplyCommandAsync(_projectId, command);
+            if (result.Status == "has_dependencies")
+            {
+                Messages.Add(ChatMessage.Error(
+                    $"特徵「{featureId}」被其他特徵依賴，無法直接刪除。請先刪除依賴它的特徵。"));
+                return;
+            }
+            if (result.Status == "error")
+            {
+                Messages.Add(ChatMessage.Error($"刪除失敗：{result.ErrorCode} — {result.EngineMessage}"));
+                return;
+            }
+
+            Messages.Add(ChatMessage.Assistant($"已刪除特徵「{featureId}」，重建中…"));
+            _selectedFeature = null;
+            await UpdateFeatureTreeAsync();
+            await RebuildAsync();
+        }
+        catch (Exception ex)
+        {
+            Messages.Add(ChatMessage.Error($"刪除特徵失敗：{ex.Message}"));
+        }
+        finally { IsBusy = false; }
+    }
+
+    /// <summary>
+    /// 編輯參數——捲動參數面板到頂部並聚焦（供右鍵選單使用）。
+    /// </summary>
+    private void EditParameters()
+    {
+        // 參數面板已在左下方顯示，選取特徵時自動更新；
+        // 此命令確保右鍵「編輯參數」時面板可見。
+        OnPropertyChanged(nameof(SelectedFeatureParameters));
+    }
+
+    /// <summary>
     /// 從特徵圖 JSON 中取出指定特徵的參數（用於 diff before）。
     /// </summary>
     private static Dictionary<string, object> ExtractFeatureParams(string featureGraphJson, string featureId)
@@ -941,7 +1163,11 @@ public class MainViewModel : INotifyPropertyChanged
     private void UpdateParameterPanel()
     {
         SelectedFeatureParameters.Clear();
-        if (_selectedFeature == null) return;
+        if (_selectedFeature == null)
+        {
+            CanEditSketch = false;
+            return;
+        }
 
         var featureId = _selectedFeature.FeatureId;
         foreach (var p in _selectedFeature.Parameters)
@@ -950,6 +1176,13 @@ public class MainViewModel : INotifyPropertyChanged
                 p.ApplyCommand = new AsyncRelayCommand(() => ApplyParameterEditAsync(featureId, p));
             SelectedFeatureParameters.Add(p);
         }
+
+        // 草圖類型特徵才顯示「編輯草圖」按鈕
+        CanEditSketch = _selectedFeature.FeatureType.Equals("sketch", StringComparison.OrdinalIgnoreCase);
+
+        // 更新右鍵選單命令可用狀態
+        ((AsyncRelayCommand)DeleteFeatureCommand).RaiseCanExecuteChanged();
+        ((RelayCommand)EditParametersCommand).RaiseCanExecuteChanged();
 
         // 高亮對應 mesh
         ViewerScriptRequested?.Invoke($"highlightByName('{featureId}');");
@@ -1033,6 +1266,10 @@ public class MainViewModel : INotifyPropertyChanged
         ((AsyncRelayCommand<string>)LoadExampleCommand).RaiseCanExecuteChanged();
         ((AsyncRelayCommand)UndoCommand).RaiseCanExecuteChanged();
         ((AsyncRelayCommand)RedoCommand).RaiseCanExecuteChanged();
+        ((AsyncRelayCommand)NewSketchCommand).RaiseCanExecuteChanged();
+        ((AsyncRelayCommand)EditSketchCommand).RaiseCanExecuteChanged();
+        ((AsyncRelayCommand)DeleteFeatureCommand).RaiseCanExecuteChanged();
+        ((RelayCommand)EditParametersCommand).RaiseCanExecuteChanged();
         OnPropertyChanged(nameof(HasProject));
     }
 

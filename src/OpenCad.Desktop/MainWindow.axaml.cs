@@ -122,18 +122,23 @@ public partial class MainWindow : Window
                 var msg = ViewerBridge.ParseMessage(msgJson);
                 if (msg == null) continue;
 
-                if (msg.Type == ViewerBridge.MessageType.Loaded)
+                if (DataContext is ViewModels.MainViewModel vm)
                 {
-                    if (DataContext is ViewModels.MainViewModel vm)
+                    switch (msg.Type)
                     {
-                        vm.HasModel = true;
-                    }
-                }
-                else if (msg.Type == ViewerBridge.MessageType.Error)
-                {
-                    if (DataContext is ViewModels.MainViewModel vm)
-                    {
-                        vm.ModelInfoText = $"載入錯誤: {msg.ErrorMessage}";
+                        case ViewerBridge.MessageType.Loaded:
+                            vm.HasModel = true;
+                            break;
+                        case ViewerBridge.MessageType.Error:
+                            vm.ModelInfoText = $"載入錯誤: {msg.ErrorMessage}";
+                            break;
+                        case ViewerBridge.MessageType.SketchCommitted:
+                            if (msg.FeatureId != null && msg.EntitiesJson != null)
+                                _ = vm.CommitSketchAsync(msg.FeatureId, msg.EntitiesJson);
+                            break;
+                        case ViewerBridge.MessageType.SketchCancelled:
+                            vm.CancelSketch();
+                            break;
                     }
                 }
             }

@@ -133,6 +133,7 @@ class ApplyCommandRequest(BaseModel):
     preserve: list[str] = []
     export_format: str = "all"
     standard_parts: dict[str, Any] | None = None
+    sketch_entities: list[dict[str, Any]] | None = None
     reasoning: str = ""
 
 
@@ -211,9 +212,9 @@ async def apply_command(project_id: str, req: ApplyCommandRequest, _: None = Dep
         return {"status": "created", "feature_id": feature.feature_id}
 
     elif req.action == "update_feature":
-        if req.target_feature_id is None or (req.parameters is None and req.standard_parts is None):
-            raise HTTPException(400, "update_feature 需要 target_feature_id 和 parameters 或 standard_parts")
-        feature = graph.update_feature(req.target_feature_id, req.parameters or {}, req.standard_parts)
+        if req.target_feature_id is None or (req.parameters is None and req.standard_parts is None and req.sketch_entities is None):
+            raise HTTPException(400, "update_feature 需要 target_feature_id 和 parameters、standard_parts 或 sketch_entities")
+        feature = graph.update_feature(req.target_feature_id, req.parameters or {}, req.standard_parts, req.sketch_entities)
         _save_revision(proj, req)
         return {"status": "updated", "feature_id": feature.feature_id}
 

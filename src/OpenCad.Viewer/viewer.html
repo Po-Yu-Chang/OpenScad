@@ -24,6 +24,88 @@
             display: none;
             background: rgba(30,30,46,0.8); padding: 4px 12px; border-radius: 4px;
         }
+
+        /* ── Heads-up View Toolbar (top center) ── */
+        #view-toolbar {
+            position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+            display: flex; gap: 4px;
+            background: rgba(30,30,46,0.8); border-radius: 8px; padding: 4px;
+            z-index: 10;
+        }
+        #view-toolbar button {
+            background: transparent; border: none; color: #cdd6f4;
+            font-family: sans-serif; font-size: 13px;
+            padding: 4px 10px; border-radius: 6px; cursor: pointer;
+        }
+        #view-toolbar button:hover { background: #45475a; }
+
+        /* ── Sketch Mode Overlays ── */
+        #sketch-toolbar {
+            position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+            display: none; gap: 4px; align-items: center;
+            background: rgba(30,30,46,0.9); border-radius: 8px; padding: 4px 8px;
+            z-index: 20;
+        }
+        #sketch-toolbar button {
+            background: transparent; border: 1px solid #45475a; color: #cdd6f4;
+            font-family: sans-serif; font-size: 13px;
+            padding: 4px 10px; border-radius: 6px; cursor: pointer;
+        }
+        #sketch-toolbar button:hover { background: #45475a; }
+        #sketch-toolbar button.active { background: #89b4fa; color: #1e1e2e; }
+        #sketch-toolbar .separator { color: #45475a; margin: 0 2px; }
+
+        /* Confirmation Corner (top right) */
+        #confirm-corner {
+            position: absolute; top: 10px; right: 10px;
+            display: none; gap: 8px; z-index: 20;
+        }
+        #confirm-corner button {
+            width: 40px; height: 40px; border-radius: 8px; border: none;
+            font-size: 22px; cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+        }
+        #confirm-corner .btn-ok { background: #a6e3a1; color: #1e1e2e; }
+        #confirm-corner .btn-cancel { background: #f38ba8; color: #1e1e2e; }
+
+        /* PropertyManager Dialog (top left) */
+        #prop-manager {
+            position: absolute; top: 50px; left: 10px;
+            display: none;
+            background: rgba(30,30,46,0.95); border: 1px solid #45475a; border-radius: 8px;
+            padding: 12px; min-width: 220px; z-index: 20;
+            font-family: sans-serif; color: #cdd6f4;
+        }
+        #prop-manager h3 { font-size: 13px; margin-bottom: 8px; color: #89b4fa; }
+        #prop-manager .group { border: 1px solid #313244; border-radius: 4px; padding: 6px; margin-bottom: 6px; }
+        #prop-manager .group-title { font-size: 11px; color: #a6adc8; margin-bottom: 4px; }
+        #prop-manager label { display: block; font-size: 11px; color: #a6adc8; margin: 2px 0; }
+        #prop-manager input {
+            width: 100%; background: #313244; border: 1px solid #45475a; color: #cdd6f4;
+            font-size: 12px; padding: 2px 4px; border-radius: 3px;
+        }
+        #prop-manager .pm-buttons { display: flex; gap: 4px; margin-top: 8px; }
+        #prop-manager .pm-buttons button {
+            flex: 1; padding: 4px; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;
+        }
+        #prop-manager .pm-ok { background: #a6e3a1; color: #1e1e2e; }
+        #prop-manager .pm-cancel { background: #45475a; color: #cdd6f4; }
+
+        /* Sketch status bar (bottom) */
+        #sketch-status {
+            position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%);
+            display: none; color: #a6adc8; font-family: sans-serif; font-size: 12px;
+            background: rgba(30,30,46,0.8); padding: 4px 12px; border-radius: 4px; z-index: 20;
+        }
+
+        /* Dimension labels (sketch entities) */
+        .dim-label {
+            position: absolute; color: #89b4fa; font-family: monospace; font-size: 11px;
+            background: rgba(30,30,46,0.8); padding: 1px 4px; border-radius: 3px;
+            pointer-events: auto; cursor: pointer; z-index: 15;
+            transform: translate(-50%, -50%);
+        }
+        .dim-label:hover { color: #f9e2af; }
     </style>
 </head>
 <body>
@@ -31,6 +113,53 @@
     <div id="loading">載入模型中...</div>
     <div id="highlight-indicator"></div>
     <div id="info"></div>
+
+    <!-- Heads-up View Toolbar -->
+    <div id="view-toolbar">
+        <button onclick="setView('iso')">等角</button>
+        <button onclick="setView('front')">正視</button>
+        <button onclick="setView('top')">俯視</button>
+        <button onclick="setView('right')">右視</button>
+        <button onclick="zoomFit()">縮放至適合</button>
+    </div>
+
+    <!-- Sketch Mode Toolbar -->
+    <div id="sketch-toolbar">
+        <button id="tool-select" class="active" onclick="sketchTool('select')">選取</button>
+        <button id="tool-rect" onclick="sketchTool('rect')">▭ 矩形</button>
+        <button id="tool-circle" onclick="sketchTool('circle')">○ 圓</button>
+        <button id="tool-slot" onclick="sketchTool('slot')">⬭ 長圓孔</button>
+        <button id="tool-poly" onclick="sketchTool('polygon')">⬡ 多邊形</button>
+        <span class="separator">|</span>
+        <button onclick="sketchDeleteSelected()">🗑 刪除</button>
+    </div>
+
+    <!-- Confirmation Corner -->
+    <div id="confirm-corner">
+        <button class="btn-ok" onclick="sketchCommit()">✓</button>
+        <button class="btn-cancel" onclick="sketchCancel()">✗</button>
+    </div>
+
+    <!-- PropertyManager Dialog -->
+    <div id="prop-manager">
+        <h3 id="pm-title">矩形</h3>
+        <div class="group">
+            <div class="group-title">位置</div>
+            <label>中心 X<input type="number" id="pm-cx" step="1"></label>
+            <label>中心 Y<input type="number" id="pm-cy" step="1"></label>
+        </div>
+        <div class="group" id="pm-size-group">
+            <div class="group-title">尺寸</div>
+            <div id="pm-size-fields"></div>
+        </div>
+        <div class="pm-buttons">
+            <button class="pm-ok" onclick="pmOk()">✓ 確定</button>
+            <button class="pm-cancel" onclick="pmCancel()">✗ 取消</button>
+        </div>
+    </div>
+
+    <!-- Sketch Status -->
+    <div id="sketch-status">0 個實體，參數化定義</div>
 
     <script type="importmap">
     {
@@ -69,7 +198,7 @@
         const scene = new THREE.Scene();
         scene.background = new THREE.Color(0x1e1e2e);
 
-        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 10000);
+        let camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 10000);
         camera.position.set(100, 80, 100);
 
         const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -248,18 +377,472 @@
             document.getElementById('highlight-indicator').style.display = 'none';
         };
 
+        // ─── Zoom to Fit ───
+        window.zoomFit = function() {
+            if (!currentModel) return;
+            const box = new THREE.Box3().setFromObject(currentModel);
+            const center = box.getCenter(new THREE.Vector3());
+            const size = box.getSize(new THREE.Vector3());
+            const maxDim = Math.max(size.x, size.y, size.z);
+            const dist = maxDim * 1.5;
+            camera.position.set(center.x + dist * 0.7, center.y + dist * 0.5, center.z + dist);
+            controls.target.copy(center);
+            controls.update();
+        };
+
+        // ═══════════════════════════════════════════
+        // ─── Sketch Mode ───
+        // ═══════════════════════════════════════════
+
+        let sketchMode = false;
+        let sketchFeatureId = null;
+        let sketchEntities = [];
+        let sketchMeshes = [];
+        let sketchDimLabels = [];
+        let sketchSelectedIndex = -1;
+        let sketchTool = 'select';
+        let sketchOrthoCamera = null;
+        let sketchGrid = null;
+        let sketchAxes = null;
+        let savedCamera = null;
+
+        // PropertyManager state
+        let pmCallback = null;
+        let pmEditingIndex = -1;
+
+        function enterSketchMode(featureId, entities) {
+            sketchMode = true;
+            sketchFeatureId = featureId;
+            sketchEntities = entities ? (Array.isArray(entities) ? entities : JSON.parse(entities)) : [];
+            sketchSelectedIndex = -1;
+            sketchTool = 'select';
+
+            // Save and switch to orthographic top-down camera
+            savedCamera = camera;
+            sketchOrthoCamera = new THREE.OrthographicCamera(
+                -window.innerWidth / 2, window.innerWidth / 2,
+                window.innerHeight / 2, -window.innerHeight / 2,
+                -1000, 1000
+            );
+            sketchOrthoCamera.position.set(0, 0, 500);
+            sketchOrthoCamera.lookAt(0, 0, 0);
+            camera = sketchOrthoCamera;
+
+            // Disable rotation, keep pan and zoom
+            controls.enableRotate = false;
+            controls.target.set(0, 0, 0);
+            controls.update();
+
+            // Hide 3D model
+            if (currentModel) currentModel.visible = false;
+            grid.visible = false;
+
+            // Show sketch grid (10mm spacing)
+            sketchGrid = new THREE.GridHelper(500, 50, 0x45475a, 0x313244);
+            sketchGrid.rotation.x = Math.PI / 2;  // XY plane
+            scene.add(sketchGrid);
+
+            // X/Y axes (red/green)
+            const axisMat = new THREE.LineBasicMaterial({ color: 0xf38ba8 });
+            const axisGeo = new THREE.BufferGeometry().setFromPoints([
+                new THREE.Vector3(-250, 0, 0), new THREE.Vector3(250, 0, 0)
+            ]);
+            sketchAxes = new THREE.LineSegments(axisGeo, axisMat);
+            scene.add(sketchAxes);
+
+            const axisYGeo = new THREE.BufferGeometry().setFromPoints([
+                new THREE.Vector3(0, -250, 0), new THREE.Vector3(0, 250, 0)
+            ]);
+            const axisYMat = new THREE.LineBasicMaterial({ color: 0xa6e3a1 });
+            const axisY = new THREE.LineSegments(axisYGeo, axisYMat);
+            sketchAxes.add(axisY);
+
+            // Show UI overlays
+            document.getElementById('view-toolbar').style.display = 'none';
+            document.getElementById('sketch-toolbar').style.display = 'flex';
+            document.getElementById('confirm-corner').style.display = 'flex';
+            document.getElementById('sketch-status').style.display = 'block';
+
+            // Render existing entities
+            renderSketchEntities();
+            updateSketchStatus();
+        }
+
+        function exitSketchMode() {
+            if (!sketchMode) return;
+            sketchMode = false;
+
+            // Restore camera
+            if (savedCamera) {
+                camera = savedCamera;
+                savedCamera = null;
+            }
+            sketchOrthoCamera = null;
+            controls.enableRotate = true;
+            controls.update();
+
+            // Restore model
+            if (currentModel) currentModel.visible = true;
+            grid.visible = true;
+
+            // Remove sketch grid and axes
+            if (sketchGrid) { scene.remove(sketchGrid); sketchGrid = null; }
+            if (sketchAxes) { scene.remove(sketchAxes); sketchAxes = null; }
+
+            // Clear sketch meshes and labels
+            clearSketchMeshes();
+
+            // Hide UI overlays
+            document.getElementById('view-toolbar').style.display = 'flex';
+            document.getElementById('sketch-toolbar').style.display = 'none';
+            document.getElementById('confirm-corner').style.display = 'none';
+            document.getElementById('sketch-status').style.display = 'none';
+            document.getElementById('prop-manager').style.display = 'none';
+        }
+
+        function clearSketchMeshes() {
+            sketchMeshes.forEach(m => scene.remove(m));
+            sketchMeshes = [];
+            sketchDimLabels.forEach(l => l.remove());
+            sketchDimLabels = [];
+        }
+
+        function renderSketchEntities() {
+            clearSketchMeshes();
+            sketchEntities.forEach((entity, idx) => {
+                const mesh = createEntityMesh(entity, idx === sketchSelectedIndex);
+                if (mesh) { scene.add(mesh); sketchMeshes.push(mesh); }
+                createDimLabel(entity, idx);
+            });
+        }
+
+        function createEntityMesh(entity, isSelected) {
+            const color = isSelected ? 0xf9e2af : 0x89b4fa;
+            const mat = new THREE.LineBasicMaterial({ color });
+            const type = entity.entity_type || entity.type;
+
+            if (type === 'rectangle') {
+                const cx = entity.center_x || 0, cy = entity.center_y || 0;
+                const w = entity.width || 0, h = entity.height || 0;
+                const geo = new THREE.BufferGeometry().setFromPoints([
+                    new THREE.Vector3(cx - w/2, cy - h/2, 0),
+                    new THREE.Vector3(cx + w/2, cy - h/2, 0),
+                    new THREE.Vector3(cx + w/2, cy + h/2, 0),
+                    new THREE.Vector3(cx - w/2, cy + h/2, 0),
+                    new THREE.Vector3(cx - w/2, cy - h/2, 0),
+                ]);
+                return new THREE.Line(geo, mat);
+            }
+
+            if (type === 'circle') {
+                const cx = entity.center_x || 0, cy = entity.center_y || 0;
+                const r = entity.radius || 0;
+                const points = [];
+                const segs = 64;
+                for (let i = 0; i <= segs; i++) {
+                    const a = (i / segs) * Math.PI * 2;
+                    points.push(new THREE.Vector3(cx + Math.cos(a) * r, cy + Math.sin(a) * r, 0));
+                }
+                const geo = new THREE.BufferGeometry().setFromPoints(points);
+                return new THREE.Line(geo, mat);
+            }
+
+            if (type === 'slot') {
+                const cx = entity.center_x || 0, cy = entity.center_y || 0;
+                const len = entity.length || 0, wid = entity.width || 0;
+                const ang = (entity.angle || 0) * Math.PI / 180;
+                const r = wid / 2;
+                const halfL = Math.max(0, len / 2 - r);
+                const cos = Math.cos(ang), sin = Math.sin(ang);
+                // Helper to transform local→world
+                function rot(x, y) {
+                    return new THREE.Vector3(
+                        x * cos - y * sin + cx,
+                        x * sin + y * cos + cy, 0
+                    );
+                }
+                const points = [];
+                const segs = 16;
+                // Bottom edge: left to right
+                points.push(rot(-halfL, -r));
+                // Right semicircle: from bottom (-r) to top (+r), going clockwise (angle -90→90)
+                for (let i = 1; i < segs; i++) {
+                    const a = -Math.PI / 2 + (i / segs) * Math.PI;
+                    points.push(rot(halfL + Math.cos(a) * r, Math.sin(a) * r));
+                }
+                points.push(rot(halfL, r));
+                // Top edge: right to left
+                points.push(rot(-halfL, r));
+                // Left semicircle: from top (+r) to bottom (-r), going clockwise (angle 90→270)
+                for (let i = 1; i < segs; i++) {
+                    const a = Math.PI / 2 + (i / segs) * Math.PI;
+                    points.push(rot(-halfL + Math.cos(a) * r, Math.sin(a) * r));
+                }
+                points.push(rot(-halfL, -r));
+                const geo = new THREE.BufferGeometry().setFromPoints(points);
+                return new THREE.Line(geo, mat);
+            }
+
+            if (type === 'polygon') {
+                const cx = entity.center_x || 0, cy = entity.center_y || 0;
+                const sides = entity.sides || 6;
+                const r = entity.radius || 0;
+                const points = [];
+                for (let i = 0; i <= sides; i++) {
+                    const a = (i / sides) * Math.PI * 2 - Math.PI / 2;
+                    points.push(new THREE.Vector3(cx + Math.cos(a) * r, cy + Math.sin(a) * r, 0));
+                }
+                const geo = new THREE.BufferGeometry().setFromPoints(points);
+                return new THREE.Line(geo, mat);
+            }
+
+            return null;
+        }
+
+        function createDimLabel(entity, idx) {
+            const type = entity.entity_type || entity.type;
+            const cx = entity.center_x || 0, cy = entity.center_y || 0;
+            let text = '';
+            if (type === 'rectangle') text = `${entity.width}×${entity.height}`;
+            else if (type === 'circle') text = `Ø${(entity.radius * 2).toFixed(1)}`;
+            else if (type === 'slot') text = `${entity.length}×${entity.width}`;
+            else if (type === 'polygon') text = `${entity.sides}邊 R${entity.radius}`;
+
+            const label = document.createElement('div');
+            label.className = 'dim-label';
+            label.textContent = text;
+            label.dataset.idx = idx;
+            label.ondblclick = () => {
+                sketchSelectedIndex = idx;
+                openPropertyManager(type, entity, idx);
+            };
+            label.onclick = () => {
+                sketchSelectedIndex = idx;
+                renderSketchEntities();
+            };
+            document.body.appendChild(label);
+            sketchDimLabels.push(label);
+        }
+
+        function updateDimLabelPositions() {
+            const w = window.innerWidth, h = window.innerHeight;
+            sketchEntities.forEach((entity, idx) => {
+                const label = sketchDimLabels[idx];
+                if (!label) return;
+                const cx = entity.center_x || 0, cy = entity.center_y || 0;
+                const pos = new THREE.Vector3(cx, cy, 0);
+                pos.project(camera);
+                label.style.left = ((pos.x + 1) / 2 * w) + 'px';
+                label.style.top = ((-pos.y + 1) / 2 * h) + 'px';
+            });
+        }
+
+        function updateSketchStatus() {
+            document.getElementById('sketch-status').textContent =
+                `${sketchEntities.length} 個實體，參數化定義`;
+        }
+
+        // ── Sketch Tool Selection ──
+        window.sketchTool = function(tool) {
+            sketchTool = tool;
+            // Update active button
+            ['select', 'rect', 'circle', 'slot', 'polygon'].forEach(t => {
+                const btn = document.getElementById('tool-' + t);
+                if (btn) btn.classList.toggle('active', t === tool);
+            });
+        };
+
+        // ── Canvas click in sketch mode ──
+        renderer.domElement.addEventListener('click', (event) => {
+            if (!sketchMode) return;
+            if (sketchTool === 'select') return;
+
+            // Get world coordinates from click
+            const rect = renderer.domElement.getBoundingClientRect();
+            const ndcX = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+            const ndcY = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+            const vec = new THREE.Vector3(ndcX, ndcY, 0);
+            vec.unproject(camera);
+            const worldX = vec.x;
+            const worldY = vec.y;
+
+            // Snap to 1mm
+            const sx = Math.round(worldX);
+            const sy = Math.round(worldY);
+
+            if (sketchTool === 'rect') openRectPM(sx, sy);
+            else if (sketchTool === 'circle') openCirclePM(sx, sy);
+            else if (sketchTool === 'slot') openSlotPM(sx, sy);
+            else if (sketchTool === 'polygon') openPolygonPM(sx, sy);
+        });
+
+        // ── PropertyManager ──
+        function showPM(title, sizeFields, cx, cy, callback) {
+            document.getElementById('pm-title').textContent = title;
+            document.getElementById('pm-cx').value = cx;
+            document.getElementById('pm-cy').value = cy;
+            const sizeDiv = document.getElementById('pm-size-fields');
+            sizeDiv.innerHTML = sizeFields;
+            document.getElementById('prop-manager').style.display = 'block';
+            pmCallback = callback;
+        }
+
+        function openRectPM(cx, cy, existing, editIdx) {
+            const w = existing ? existing.width : 20;
+            const h = existing ? existing.height : 20;
+            showPM('矩形', `
+                <label>寬<input type="number" id="pm-w" step="1" value="${w}"></label>
+                <label>高<input type="number" id="pm-h" step="1" value="${h}"></label>
+            `, cx, cy, () => {
+                const e = {
+                    entity_type: 'rectangle',
+                    center_x: parseFloat(document.getElementById('pm-cx').value),
+                    center_y: parseFloat(document.getElementById('pm-cy').value),
+                    width: parseFloat(document.getElementById('pm-w').value),
+                    height: parseFloat(document.getElementById('pm-h').value),
+                };
+                if (editIdx >= 0) sketchEntities[editIdx] = e;
+                else sketchEntities.push(e);
+                renderSketchEntities();
+                updateSketchStatus();
+            });
+            pmEditingIndex = editIdx;
+        }
+
+        function openCirclePM(cx, cy, existing, editIdx) {
+            const r = existing ? existing.radius : 10;
+            showPM('圓', `
+                <label>半徑<input type="number" id="pm-r" step="1" value="${r}"></label>
+            `, cx, cy, () => {
+                const e = {
+                    entity_type: 'circle',
+                    center_x: parseFloat(document.getElementById('pm-cx').value),
+                    center_y: parseFloat(document.getElementById('pm-cy').value),
+                    radius: parseFloat(document.getElementById('pm-r').value),
+                };
+                if (editIdx >= 0) sketchEntities[editIdx] = e;
+                else sketchEntities.push(e);
+                renderSketchEntities();
+                updateSketchStatus();
+            });
+            pmEditingIndex = editIdx;
+        }
+
+        function openSlotPM(cx, cy, existing, editIdx) {
+            const len = existing ? existing.length : 30;
+            const wid = existing ? existing.width : 8;
+            const ang = existing ? existing.angle : 0;
+            showPM('長圓孔', `
+                <label>長<input type="number" id="pm-len" step="1" value="${len}"></label>
+                <label>寬<input type="number" id="pm-wid" step="1" value="${wid}"></label>
+                <label>角度<input type="number" id="pm-ang" step="1" value="${ang}"></label>
+            `, cx, cy, () => {
+                const e = {
+                    entity_type: 'slot',
+                    center_x: parseFloat(document.getElementById('pm-cx').value),
+                    center_y: parseFloat(document.getElementById('pm-cy').value),
+                    length: parseFloat(document.getElementById('pm-len').value),
+                    width: parseFloat(document.getElementById('pm-wid').value),
+                    angle: parseFloat(document.getElementById('pm-ang').value),
+                };
+                if (editIdx >= 0) sketchEntities[editIdx] = e;
+                else sketchEntities.push(e);
+                renderSketchEntities();
+                updateSketchStatus();
+            });
+            pmEditingIndex = editIdx;
+        }
+
+        function openPolygonPM(cx, cy, existing, editIdx) {
+            const sides = existing ? existing.sides : 6;
+            const r = existing ? existing.radius : 15;
+            showPM('多邊形', `
+                <label>邊數<input type="number" id="pm-sides" step="1" value="${sides}"></label>
+                <label>外接圓半徑<input type="number" id="pm-r" step="1" value="${r}"></label>
+            `, cx, cy, () => {
+                const e = {
+                    entity_type: 'polygon',
+                    center_x: parseFloat(document.getElementById('pm-cx').value),
+                    center_y: parseFloat(document.getElementById('pm-cy').value),
+                    sides: parseInt(document.getElementById('pm-sides').value),
+                    radius: parseFloat(document.getElementById('pm-r').value),
+                };
+                if (editIdx >= 0) sketchEntities[editIdx] = e;
+                else sketchEntities.push(e);
+                renderSketchEntities();
+                updateSketchStatus();
+            });
+            pmEditingIndex = editIdx;
+        }
+
+        function openPropertyManager(type, entity, editIdx) {
+            const cx = entity.center_x || 0, cy = entity.center_y || 0;
+            if (type === 'rectangle') openRectPM(cx, cy, entity, editIdx);
+            else if (type === 'circle') openCirclePM(cx, cy, entity, editIdx);
+            else if (type === 'slot') openSlotPM(cx, cy, entity, editIdx);
+            else if (type === 'polygon') openPolygonPM(cx, cy, entity, editIdx);
+        }
+
+        window.pmOk = function() {
+            document.getElementById('prop-manager').style.display = 'none';
+            if (pmCallback) { pmCallback(); pmCallback = null; }
+            // Reset to select tool after creating
+            if (pmEditingIndex < 0) sketchTool('select');
+            pmEditingIndex = -1;
+        };
+
+        window.pmCancel = function() {
+            document.getElementById('prop-manager').style.display = 'none';
+            pmCallback = null;
+            pmEditingIndex = -1;
+            if (sketchTool !== 'select') sketchTool('select');
+        };
+
+        // ── Sketch Delete ──
+        window.sketchDeleteSelected = function() {
+            if (sketchSelectedIndex < 0) return;
+            sketchEntities.splice(sketchSelectedIndex, 1);
+            sketchSelectedIndex = -1;
+            renderSketchEntities();
+            updateSketchStatus();
+        };
+
+        // ── Sketch Commit / Cancel ──
+        window.sketchCommit = function() {
+            window.opencadNotify({
+                type: 'sketch_committed',
+                feature_id: sketchFeatureId,
+                entities: sketchEntities,
+            });
+            exitSketchMode();
+        };
+
+        window.sketchCancel = function() {
+            window.opencadNotify({ type: 'sketch_cancelled' });
+            exitSketchMode();
+        };
+
         // ─── 動畫迴圈 ───
         function animate() {
             requestAnimationFrame(animate);
             controls.update();
             renderer.render(scene, camera);
+            if (sketchMode) updateDimLabelPositions();
         }
         animate();
 
         // ─── 視窗大小調整 ───
         window.addEventListener('resize', () => {
-            camera.aspect = window.innerWidth / window.innerHeight;
-            camera.updateProjectionMatrix();
+            if (sketchMode && sketchOrthoCamera) {
+                sketchOrthoCamera.left = -window.innerWidth / 2;
+                sketchOrthoCamera.right = window.innerWidth / 2;
+                sketchOrthoCamera.top = window.innerHeight / 2;
+                sketchOrthoCamera.bottom = -window.innerHeight / 2;
+                sketchOrthoCamera.updateProjectionMatrix();
+            } else {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+            }
             renderer.setSize(window.innerWidth, window.innerHeight);
         });
     </script>

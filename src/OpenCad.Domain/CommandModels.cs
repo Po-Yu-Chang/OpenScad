@@ -35,6 +35,9 @@ public class CadCommand
     [JsonPropertyName("standard_parts")]
     public Dictionary<string, object>? StandardParts { get; set; }
 
+    [JsonPropertyName("sketch_entities")]
+    public List<Dictionary<string, object>>? SketchEntities { get; set; }
+
     [JsonPropertyName("reasoning")]
     public string Reasoning { get; set; } = string.Empty;
 }
