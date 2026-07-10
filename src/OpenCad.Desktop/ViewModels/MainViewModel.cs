@@ -609,7 +609,10 @@ public class MainViewModel : INotifyPropertyChanged
                 rebuild = await _worker.RebuildAsync(_projectId!);
                 if (rebuild.Status == "success")
                 {
-                    Messages.Add(ChatMessage.Assistant($"✓ 修正成功（第 {attempt} 次嘗試）"));
+                    // 比較修正前後的參數值，告知使用者實際使用的值
+                    var repairNote = DescribeRepairChange(repairCmd, graphJson);
+                    Messages.Add(ChatMessage.Assistant(
+                        $"✓ 修正成功（第 {attempt} 次嘗試）{repairNote}"));
                     return rebuild;
                 }
             }
@@ -622,6 +625,54 @@ public class MainViewModel : INotifyPropertyChanged
         // 超過最大重試次數——回傳最後一次失敗結果
         Messages.Add(ChatMessage.Error($"修正失敗——已嘗試 {maxRetries} 次"));
         return rebuild;
+    }
+
+    /// <summary>
+    /// 產生修正變更的說明文字，讓使用者知道實際使用的參數值。
+    /// </summary>
+    private static string DescribeRepairChange(CadCommand repairCmd, string graphJsonBefore)
+    {
+        try
+        {
+            if (repairCmd.Action != "update_feature" || repairCmd.TargetFeatureId == null)
+                return "";
+
+            using var doc = JsonDocument.Parse(graphJsonBefore);
+            if (!doc.RootElement.TryGetProperty("features", out var graphEl) ||
+                !graphEl.TryGetProperty("features", out var featsEl))
+                return "";
+
+            if (!featsEl.TryGetProperty(repairCmd.TargetFeatureId, out var featEl))
+                return "";
+
+            var featType = featEl.TryGetProperty("type", out var tEl) ? tEl.GetString() : "";
+            var parts = new List<string>();
+
+            if (repairCmd.Parameters != null)
+            {
+                foreach (var kv in repairCmd.Parameters)
+                {
+                    // 取得修正前的值
+                    var beforeVal = "";
+                    if (featEl.TryGetProperty("parameters", out var paramsEl) &&
+                        paramsEl.TryGetProperty(kv.Key, out var beforeEl))
+                    {
+                        beforeVal = beforeEl.GetRawText();
+                    }
+
+                    var afterVal = kv.Value?.ToString() ?? "";
+                    if (!string.IsNullOrEmpty(beforeVal) && beforeVal != afterVal)
+                    {
+                        parts.Add($"{kv.Key}: {beforeVal} → {afterVal}");
+                    }
+                }
+            }
+
+            if (parts.Count > 0)
+                return $"（參數已調整：{string.Join(", ", parts)}）";
+        }
+        catch { }
+        return "";
     }
 
     private async Task ExportAsync(string? format)
@@ -750,13 +801,18 @@ public class MainViewModel : INotifyPropertyChanged
                 {
                     var prefix = new string(' ', indent * 2);
                     sb.AppendLine($"{prefix}- {n.TypeIcon} {n.DisplayName} (`{n.FeatureId}`, type={n.FeatureType})");
+                    if (n.Parameters != null && n.Parameters.Count > 0)
+                    {
+                        foreach (var p in n.Parameters)
+                            sb.AppendLine($"{prefix}  * {p.Key}: {p.Value}");
+                    }
                     DumpTree(n.Children, indent + 1);
                 }
             }
             DumpTree(FeatureTree, 0);
             sb.AppendLine();
 
-            // ── JSON 格式（方便程式化分析） ──
+            // ── 四、JSON 格式（方便程式化分析） ──
             sb.AppendLine("---");
             sb.AppendLine("## 四、JSON 格式");
             sb.AppendLine();
@@ -773,7 +829,13 @@ public class MainViewModel : INotifyPropertyChanged
                     plan = m.Plan != null ? new
                     {
                         summary = m.Plan.Summary,
-                        steps = m.Plan.Steps?.Select(s => s.Description).ToList(),
+                        steps = m.Plan.Steps?.Select(s => new {
+                            description = s.Description,
+                            type = s.FeatureType,
+                            parameters = s.Parameters,
+                            sketch_entities = s.SketchEntities,
+                            plane = s.Plane
+                        }).ToList(),
                         missing_info = m.Plan.MissingInfo?.ToList(),
                     } : null,
                     diff = m.Diff != null ? new
@@ -937,6 +999,20 @@ public class MainViewModel : INotifyPropertyChanged
             return true;
         }
 
+        // 全部取消 / 清空 / 重新開始
+        if (IntentMatcher.IsClearAll(trimmed))
+        {
+            if (HasProject && IsWorkerConnected)
+            {
+                _ = ClearAllAsync();
+            }
+            else
+            {
+                Messages.Add(ChatMessage.Assistant("目前沒有開啟的專案，無法清空。"));
+            }
+            return true;
+        }
+
         // 視角操作
         var viewKeyword = IntentMatcher.MatchView(trimmed);
         if (viewKeyword != null)
@@ -1000,6 +1076,15 @@ public class MainViewModel : INotifyPropertyChanged
 
                 // LLM 可能輸出 {"type":"XY"} 或 {"base":"XY"}——統一正規化為 base 格式
                 var plane = NormalizePlane(step.Plane);
+
+                // sketch 步驟必須包含 sketch_entities，否則建立空草圖會導致 pad 失敗
+                if (featType == FeatureType.Sketch &&
+                    (step.SketchEntities == null || step.SketchEntities.Count == 0))
+                {
+                    Messages.Add(ChatMessage.Error(
+                        $"計畫第 {index} 步（sketch）缺少 sketch_entities——LLM 未產生草圖幾何，請重新描述需求。"));
+                    return;
+                }
 
                 // pad/revolve 沒有前置草圖時：若步驟自帶 sketch_entities，
                 // 確定性拆出草圖特徵；否則計畫不完整，中止並回報（避免建出必然重建失敗的特徵）
@@ -1354,6 +1439,62 @@ public class MainViewModel : INotifyPropertyChanged
         catch (Exception ex)
         {
             Messages.Add(ChatMessage.Error($"重做失敗：{ex.Message}"));
+        }
+        finally { IsBusy = false; }
+    }
+
+    /// <summary>
+    /// 清除所有使用者建立的特徵（保留基準面/原點）。
+    /// </summary>
+    private async Task ClearAllAsync()
+    {
+        if (_worker == null || _projectId == null) return;
+        try
+        {
+            IsBusy = true;
+
+            // 取得目前特徵圖，找出所有非基準面的特徵 ID
+            var projectJson = await _worker.GetProjectAsync(_projectId);
+            using var doc = JsonDocument.Parse(projectJson);
+            var featureIds = new List<string>();
+            if (doc.RootElement.TryGetProperty("features", out var featuresEl) &&
+                featuresEl.TryGetProperty("features", out var feats))
+            {
+                foreach (var prop in feats.EnumerateObject())
+                {
+                    // 跳過基準面和原點（以 __ 開頭的系統特徵）
+                    if (prop.Name.StartsWith("__")) continue;
+                    featureIds.Add(prop.Name);
+                }
+            }
+
+            if (featureIds.Count == 0)
+            {
+                Messages.Add(ChatMessage.Assistant("目前沒有任何使用者特徵，模型已經是空的。"));
+                return;
+            }
+
+            // 逐一刪除所有使用者特徵
+            foreach (var fid in featureIds)
+            {
+                var result = await _worker.ApplyCommandAsync(_projectId, new CadCommand
+                {
+                    Action = "delete_feature",
+                    TargetFeatureId = fid,
+                });
+                if (result.Status == "error")
+                {
+                    Messages.Add(ChatMessage.Error($"刪除特徵 {fid} 失敗：{result.EngineMessage}"));
+                    return;
+                }
+            }
+
+            Messages.Add(ChatMessage.Assistant($"已清除全部 {featureIds.Count} 個特徵，模型已重置。"));
+            await RebuildAsync();
+        }
+        catch (Exception ex)
+        {
+            Messages.Add(ChatMessage.Error($"清空失敗：{ex.Message}"));
         }
         finally { IsBusy = false; }
     }

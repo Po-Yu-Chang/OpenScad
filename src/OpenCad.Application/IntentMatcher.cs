@@ -9,11 +9,13 @@ public static class IntentMatcher
 {
     /// <summary>判斷是否為復原意圖。</summary>
     public static bool IsUndo(string s) =>
-        s.Contains("復原") || s.Contains("撤銷") || s.Equals("undo", StringComparison.OrdinalIgnoreCase);
+        s.Contains("復原") || s.Contains("撤銷") || s.Contains("還原") || s.Contains("上一步") || s.Contains("撤回") ||
+        s.Equals("undo", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>判斷是否為重做意圖。</summary>
     public static bool IsRedo(string s) =>
-        s.Contains("重做") || s.Contains("取消復原") || s.Equals("redo", StringComparison.OrdinalIgnoreCase);
+        s.Contains("重做") || s.Contains("取消復原") || s.Contains("取消還原") || s.Contains("下一步") ||
+        s.Equals("redo", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>匹配視角操作，回傳 "iso"/"front"/"top"/"right" 或 null。</summary>
     public static string? MatchView(string s)
@@ -38,6 +40,12 @@ public static class IntentMatcher
         s.Contains("重建") || s.Contains("重新生成") ||
         s.Equals("rebuild", StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>判斷是否為清除全部特徵意圖。</summary>
+    public static bool IsClearAll(string s) =>
+        (s.Contains("全部") && (s.Contains("取消") || s.Contains("刪除") || s.Contains("清除") || s.Contains("清空"))) ||
+        s.Contains("清空") || s.Contains("全部清空") || s.Contains("全部刪除") ||
+        s.Contains("從頭開始") || s.Contains("重新開始");
+
     /// <summary>
     /// 綜合判斷：如果輸入匹配任何本地意圖，回傳意圖類型；否則回 null。
     /// </summary>
@@ -46,6 +54,7 @@ public static class IntentMatcher
         var s = input.Trim();
         if (IsUndo(s)) return "undo";
         if (IsRedo(s)) return "redo";
+        if (IsClearAll(s)) return "clear_all";
         if (MatchView(s) is { } view) return $"view:{view}";
         if (IsZoomToFit(s)) return "zoom_fit";
         if (IsDatumPlaneToggle(s)) return "datum_toggle";

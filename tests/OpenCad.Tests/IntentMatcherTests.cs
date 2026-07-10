@@ -146,6 +146,31 @@ public class IntentMatcherTests
         Assert.False(IntentMatcher.IsRebuild(input));
     }
 
+    // ── ClearAll ──
+
+    [Theory]
+    [InlineData("全部都取消")]
+    [InlineData("全部取消")]
+    [InlineData("全部刪除")]
+    [InlineData("清空")]
+    [InlineData("全部清空")]
+    [InlineData("從頭開始")]
+    [InlineData("重新開始")]
+    public void IsClearAll_MatchesClearAllKeywords(string input)
+    {
+        Assert.True(IntentMatcher.IsClearAll(input));
+    }
+
+    [Theory]
+    [InlineData("建立方塊")]
+    [InlineData("刪除最後的圓角")]
+    [InlineData("取消倒角")]
+    [InlineData("復原")]
+    public void IsClearAll_DoesNotMatchNonClearAllInput(string input)
+    {
+        Assert.False(IntentMatcher.IsClearAll(input));
+    }
+
     // ── Classify (綜合) ──
 
     [Theory]
@@ -159,6 +184,9 @@ public class IntentMatcherTests
     [InlineData("縮放至適合", "zoom_fit")]
     [InlineData("基準面顯示", "datum_toggle")]
     [InlineData("重建", "rebuild")]
+    [InlineData("全部都取消", "clear_all")]
+    [InlineData("清空", "clear_all")]
+    [InlineData("重新開始", "clear_all")]
     public void Classify_ReturnsCorrectIntent(string input, string expected)
     {
         Assert.Equal(expected, IntentMatcher.Classify(input));

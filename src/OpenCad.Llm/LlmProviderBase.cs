@@ -34,6 +34,12 @@ public abstract class LlmProviderBase : ILlmProvider
 - 草圖座標以基準面原點為中心：rectangle 以 center_x/center_y 定位（置中於原點時可省略），circle 用 center_x/center_y。
   例如 10×8 置中底板＋中心貫穿孔：rectangle 不需座標、circle 的 center_x/center_y 都是 0。
 - 挖除（pocket）同樣需要前置 sketch 步驟提供輪廓；pocket.parameters 用 through_all: true（貫穿）或 depth（盲孔深度 mm），兩者擇一必填。
+- hole 特徵不需要 sketch 步驟，直接在 parameters 中指定 diameter、through_all、positions。
+- sketch 步驟的 sketch_entities 必須填入實際的草圖幾何，不能留空。
+  例如「10mm x 5mm 矩形草圖」的 sketch_entities 必須是：
+  [{{""type"":""rectangle"",""width"":10,""height"":5,""center_x"":0,""center_y"":0}}]
+  例如「半徑 3mm 圓」的 sketch_entities 必須是：
+  [{{""type"":""circle"",""radius"":3,""center_x"":0,""center_y"":0}}]
 如果需求中有缺少或矛盾的條件，請在 missing_info 中列出。
 回傳 JSON 格式的設計計畫。";
 
@@ -202,6 +208,8 @@ public abstract class LlmProviderBase : ILlmProvider
             ["INVALID_STANDARD_PART"] = "標準件查表失敗——請確認 standard_parts 中的 standard 欄位為有效值（如 M3/M4/M5）。",
             ["CIRCULAR_DEPENDENCY"] = "特徵圖存在循環依賴——請移除相互引用的 input/references。",
             ["GEOMETRY_ERROR"] = "幾何建立失敗——請檢查參數是否合理（如尺寸為正數、位置在實體範圍內）。",
+            ["FILLET_RADIUS_TOO_LARGE"] = "圓角半徑過大——圓角半徑超過了可用的邊緣長度或與孔/特徵碰撞。請嘗試減小半徑（例如減半）或確認該邊緣是否有足夠空間。",
+            ["CHAMFER_DISTANCE_TOO_LARGE"] = "倒角距離過大——倒角尺寸超過了可用的邊緣長度。請嘗試減小距離。",
             ["REFERENCE_NOT_FOUND"] = "參考特徵不存在——請確認 input/references 指向已存在的特徵 ID。",
         };
 
