@@ -1,0 +1,100 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:OpenCad.Desktop.ViewModels"
+        x:Class="OpenCad.Desktop.MainWindow"
+        Title="OpenCad — 全本地 LLM 原生參數化機械 CAD"
+        Width="1280" Height="800"
+        MinWidth="960" MinHeight="600">
+
+    <Design.DataContext>
+        <vm:MainViewModel />
+    </Design.DataContext>
+
+    <!-- 根佈局：工具列 + 主體三欄 + 底部驗證 -->
+    <Grid RowDefinitions="Auto,*,Auto">
+        <!-- 上方工具列 -->
+        <Border Grid.Row="0" Background="#1e1e2e" Padding="8,6">
+            <Grid ColumnDefinitions="Auto,Auto,Auto,*,Auto,Auto,Auto,Auto">
+                <Button Grid.Column="0" Content="新增專案" Command="{Binding NewProjectCommand}" Margin="0,0,8,0" />
+                <Button Grid.Column="1" Content="開啟專案" Command="{Binding OpenProjectCommand}" Margin="0,0,8,0" />
+                <Button Grid.Column="2" Content="儲存專案" Command="{Binding SaveProjectCommand}" Margin="0,0,8,0" />
+
+                <!-- 視角控制 -->
+                <StackPanel Grid.Column="4" Orientation="Horizontal" Margin="0,0,8,0">
+                    <Button Content="等角" Command="{Binding SetViewCommand}" CommandParameter="iso" Margin="0,0,4,0" />
+                    <Button Content="正視" Command="{Binding SetViewCommand}" CommandParameter="front" Margin="0,0,4,0" />
+                    <Button Content="俯視" Command="{Binding SetViewCommand}" CommandParameter="top" Margin="0,0,4,0" />
+                    <Button Content="右視" Command="{Binding SetViewCommand}" CommandParameter="right" />
+                </StackPanel>
+
+                <Button Grid.Column="5" Content="匯出 STEP" Command="{Binding ExportCommand}" CommandParameter="step" Margin="0,0,8,0" />
+                <Button Grid.Column="6" Content="匯出 STL" Command="{Binding ExportCommand}" CommandParameter="stl" Margin="0,0,8,0" />
+                <Button Grid.Column="7" Content="重建" Command="{Binding RebuildCommand}" />
+            </Grid>
+        </Border>
+
+        <!-- 主體三欄佈局：專案／特徵樹 | 3D 模型視窗 | AI 對話 -->
+        <Grid Grid.Row="1" ColumnDefinitions="260,*,320">
+            <!-- 左：專案／特徵樹 -->
+            <Border Grid.Column="0" Background="#181825" BorderBrush="#313244" BorderThickness="0,0,1,0">
+                <Grid RowDefinitions="Auto,*">
+                    <TextBlock Grid.Row="0" Text="特徵樹" FontWeight="Bold" Foreground="#cdd6f4" Margin="12,8,0,4" />
+                    <TreeView Grid.Row="1" ItemsSource="{Binding FeatureTree}" Margin="8,0,8,8">
+                        <TreeView.ItemTemplate>
+                            <TreeDataTemplate ItemsSource="{Binding Children}">
+                                <TextBlock Text="{Binding DisplayName}" Foreground="#cdd6f4" />
+                            </TreeDataTemplate>
+                        </TreeView.ItemTemplate>
+                    </TreeView>
+                </Grid>
+            </Border>
+
+            <!-- 中：3D 模型視窗（WebView + Three.js） -->
+            <Border Grid.Column="1" Background="#1e1e2e">
+                <Grid RowDefinitions="*,Auto">
+                    <WebView x:Name="PART_Viewer" Grid.Row="0" />
+                    <TextBlock Grid.Row="0" Text="3D 視窗載入中..." Foreground="#6c7086"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                               IsVisible="{Binding !HasModel}" />
+                    <TextBlock Grid.Row="1" Text="{Binding ModelInfoText}" Foreground="#a6adc8"
+                               FontFamily="Consolas" FontSize="12" Margin="12,4" />
+                </Grid>
+            </Border>
+
+            <!-- 右：AI 對話 -->
+            <Border Grid.Column="2" Background="#181825" BorderBrush="#313244" BorderThickness="1,0,0,0">
+                <Grid RowDefinitions="*,Auto,Auto">
+                    <ScrollViewer Grid.Row="0" Padding="12">
+                        <ItemsControl ItemsSource="{Binding Messages}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Background="{Binding BackgroundColor}" CornerRadius="8"
+                                            Padding="10,6" Margin="0,4" HorizontalAlignment="Stretch">
+                                        <TextBlock Text="{Binding Text}" Foreground="#cdd6f4" TextWrapping="Wrap" />
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+
+                    <!-- LLM 狀態 -->
+                    <TextBlock Grid.Row="1" Text="{Binding LlmStatus}" Foreground="#a6adc8"
+                               FontSize="11" Margin="12,4" />
+
+                    <!-- 輸入框 -->
+                    <Grid Grid.Row="2" ColumnDefinitions="*,Auto" Margin="12,4,12,12">
+                        <TextBox Grid.Column="0" Text="{Binding InputText}" Watermark="輸入設計需求..."
+                                 AcceptsReturn="True" MinHeight="60" />
+                        <Button Grid.Column="1" Content="送出" Command="{Binding SendCommand}"
+                                VerticalAlignment="Bottom" Margin="8,0,0,0" />
+                    </Grid>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <!-- 底部：參數｜約束｜驗證｜程式｜版本差異 -->
+        <Border Grid.Row="2" Background="#11111b" BorderBrush="#313244" BorderThickness="0,1,0,0" Padding="12,6">
+            <TextBlock Text="{Binding ValidationText}" Foreground="#a6adc8" FontFamily="Consolas" FontSize="11" />
+        </Border>
+    </Grid>
+</Window>

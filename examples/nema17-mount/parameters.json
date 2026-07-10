@@ -1,0 +1,9 @@
+{
+  "motor_size": { "value": "NEMA17", "type": "string" },
+  "bracket_thickness": { "value": 5.0, "type": "float", "unit": "mm" },
+  "flange_width": { "value": 47.0, "type": "float", "unit": "mm" },
+  "flange_height": { "value": 47.0, "type": "float", "unit": "mm" },
+  "mount_hole_grade": { "value": "normal", "type": "string", "description": "ISO 273 clearance grade: close|normal|loose" },
+  "screw_size": { "value": "M3", "type": "string" },
+  "fillet_radius": { "value": 2.0, "type": "float", "unit": "mm" }
+}

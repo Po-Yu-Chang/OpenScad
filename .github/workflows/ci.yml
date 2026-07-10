@@ -1,0 +1,116 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  # ─── .NET Build & Test ───
+  dotnet-build-test:
+    name: .NET Build & Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --no-restore --configuration Release
+
+      - name: Test
+        run: dotnet test --no-build --configuration Release --verbosity normal
+
+  # ─── Python Test ───
+  python-test:
+    name: Python Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r cad-worker/requirements.txt
+          pip install -r tests/cad-worker/requirements-test.txt
+          pip install -e cad-worker/
+
+      - name: Test
+        run: pytest tests/cad-worker/ -v
+
+  # ─── JSON Schema Validation ───
+  schema-validation:
+    name: JSON Schema & Example Validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install jsonschema
+        run: pip install jsonschema
+
+      - name: Validate examples against schemas
+        run: |
+          python -c "
+          import json, glob, sys
+          from jsonschema import validate
+
+          schemas = {
+              'command': 'schemas/command.schema.json',
+              'feature': 'schemas/feature.schema.json',
+              'project': 'schemas/project.schema.json',
+              'standard_parts': 'schemas/standard_parts.schema.json',
+          }
+
+          loaded = {}
+          for name, path in schemas.items():
+              with open(path) as f:
+                  loaded[name] = json.load(f)
+
+          # Validate each example project.json
+          for proj_path in glob.glob('examples/*/project.json'):
+              with open(proj_path) as f:
+                  data = json.load(f)
+              try:
+                  validate(data, loaded['project'])
+                  print(f'  OK: {proj_path}')
+              except Exception as e:
+                  print(f'FAIL: {proj_path}: {e}')
+                  sys.exit(1)
+
+          # Validate feature schemas
+          for feat_path in glob.glob('examples/*/features.json'):
+              with open(feat_path) as f:
+                  data = json.load(f)
+              try:
+                  validate(data, loaded['feature'])
+                  print(f'  OK: {feat_path}')
+              except Exception as e:
+                  print(f'FAIL: {feat_path}: {e}')
+                  sys.exit(1)
+
+          print('All schema validations passed.')
+          "

@@ -1,0 +1,12 @@
+{
+  "board_width": { "value": 27.0, "type": "float", "unit": "mm" },
+  "board_length": { "value": 40.0, "type": "float", "unit": "mm" },
+  "board_thickness": { "value": 5.0, "type": "float", "unit": "mm" },
+  "wall_thickness": { "value": 2.0, "type": "float", "unit": "mm" },
+  "inner_clearance": { "value": 0.5, "type": "float", "unit": "mm" },
+  "lens_diameter": { "value": 10.0, "type": "float", "unit": "mm" },
+  "vent_hole_diameter": { "value": 3.0, "type": "float", "unit": "mm" },
+  "vent_hole_count": { "value": 6, "type": "int", "unit": "count" },
+  "screw_size": { "value": "M2", "type": "string" },
+  "screw_grade": { "value": "close", "type": "string", "description": "ISO 273 clearance grade" }
+}

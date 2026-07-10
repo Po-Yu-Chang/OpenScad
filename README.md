@@ -41,11 +41,94 @@ OpenCad 是一套以本地大型語言模型（LLM）為主要操作入口的參
 | macOS | `.dmg` |
 | Linux | `.AppImage` |
 
-> 專案目前處於規劃／Phase 0 階段，安裝包將於首個可用版本發布。
+> 專案目前處於 Phase 0 實作階段，以下為開發者建置指南。
+
+## 開發者建置指南
+
+### 必要條件
+
+- **.NET SDK 8.0+** — [下載](https://dotnet.microsoft.com/download/dotnet/8.0)
+- **Python 3.12+** — [下載](https://www.python.org/downloads/)
+- **Ollama**（可選，LLM 功能）— [下載](https://ollama.ai)
+
+### 建置 .NET 桌面應用程式
+
+```bash
+# 還原 NuGet 套件
+dotnet restore
+
+# 建置方案
+dotnet build
+
+# 執行桌面應用程式
+dotnet run --project src/OpenCad.Desktop
+
+# 執行單元測試
+dotnet test
+```
+
+### 建置 Python CAD Worker
+
+```bash
+cd cad-worker
+
+# 安裝相依套件
+pip install -r requirements.txt
+
+# 安裝測試相依套件
+pip install -r ../tests/cad-worker/requirements-test.txt
+
+# 啟動 CAD Worker（預設監聽 127.0.0.1:8765）
+python run_worker.py
+
+# 執行測試
+cd ..
+python -m pytest tests/cad-worker/ -v
+```
+
+### 專案結構
+
+```
+OpenScad/
+├── schemas/                      # JSON Schema（Command、Feature、Project、Standard Parts）
+├── cad-worker/                   # Python CAD Worker（FastAPI + build123d）
+│   ├── cad_worker/
+│   │   ├── server.py             # FastAPI 伺服器（API 端點）
+│   │   ├── feature_graph.py      # Feature Graph 核心資料結構
+│   │   ├── standard_parts.py     # ISO 273、NEMA 標準件查表
+│   │   ├── adapters/             # build123d 引擎轉接器
+│   │   ├── validators/           # 幾何驗證器
+│   │   └── exporters/            # STEP/STL/GLB/PNG 匯出器
+│   └── run_worker.py             # 啟動腳本
+├── src/                          # C# .NET 8 專案
+│   ├── OpenCad.Domain/           # 領域模型（Feature Graph、Command、Enums）
+│   ├── OpenCad.Application/      # 應用層介面、版本管理、錯誤碼
+│   ├── OpenCad.Infrastructure/   # CAD Worker HTTP 客戶端、程序生命週期管理
+│   ├── OpenCad.Llm/              # Ollama LLM Provider（結構化輸出）
+│   ├── OpenCad.Viewer/           # Three.js 3D 檢視器（WebView 橋接）
+│   └── OpenCad.Desktop/          # Avalonia UI 桌面應用程式
+├── tests/
+│   ├── OpenCad.Tests/            # .NET xUnit 單元測試
+│   └── cad-worker/               # Python pytest 單元測試
+├── examples/                     # 範例模型
+│   ├── nema17-mount/             # NEMA17 步進馬達安裝支架
+│   ├── needle-box-5x10/          # 5x10 針座盒
+│   └── esp32cam-enclosure/       # ESP32-CAM 外殼
+├── .github/workflows/            # GitHub Actions CI/CD
+└── Documemt/                     # 架構規劃書
+```
 
 ## 開發路線
 
-- **Phase 0** — 技術驗證：Avalonia＋Python Worker＋build123d＋GLB 顯示＋三平台 CI
+- **Phase 0** ✅ — 技術驗證：Avalonia＋Python Worker＋build123d＋GLB 顯示＋三平台 CI
+  - ✅ JSON Schema（Command、Feature、Project、Standard Parts）
+  - ✅ Python CAD Worker（FastAPI、Feature Graph、build123d Adapter、驗證器、匯出器）
+  - ✅ .NET 8 Avalonia UI 桌面應用程式（MVVM 架構）
+  - ✅ Ollama LLM Provider（結構化輸出）
+  - ✅ Three.js 3D 檢視器
+  - ✅ 單元測試（.NET 17 項 + Python 30 項）
+  - ✅ 範例模型（NEMA17 支架、針座盒、ESP32-CAM 外殼）
+  - ✅ GitHub Actions CI/CD（三平台矩陣）
 - **Phase 1** — 單零件 AI CAD：Command Schema、Feature Graph、重建與驗證
 - **Phase 2** — 選取與局部修改：Persistent Reference、差異比較
 - **Phase 3** — 圖片與草圖輸入

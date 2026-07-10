@@ -1,0 +1,13 @@
+{
+  "$schema": "../../schemas/project.schema.json",
+  "schema_version": "1.0",
+  "project_id": "needle-box-5x10",
+  "name": "Needle Box 5x10",
+  "description": "5排x10列縫衣針收納盒",
+  "created_at": "2026-07-10T00:00:00Z",
+  "modified_at": "2026-07-10T00:00:00Z",
+  "units": "mm",
+  "engine": "build123d",
+  "features_file": "features.json",
+  "parameters_file": "parameters.json"
+}

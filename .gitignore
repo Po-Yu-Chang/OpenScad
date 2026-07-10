@@ -1,25 +1,80 @@
-# .NET
+## .NET / Visual Studio
 bin/
 obj/
+*.dll
+*.exe
+*.pdb
 *.user
+*.suo
+*.userprefs
+*.cache
+*.log
+*.tlog
+.vs/
+*.rsuser
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Aa]r[Tt]ifacts/
+*.binlog
 
-# Python
+## NuGet
+*.nupkg
+*.snupkg
+.nuget/
+packages/
+
+## Python
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg-link
+.eggs/
+dist/
+build/
+.tox/
+.nox/
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 .venv/
 venv/
+env/
+ENV/
 
-# Build / packaging outputs
-dist/
+## CAD artifacts (generated, not source)
+*.step
+*.stp
+*.stl
+*.glb
+*.gltf
+*.obj
+*.png
+opencad.log
+opencad.log.*
+
+## IDE
+.idea/
+*.swp
+*.swo
+*~
+.editorconfig.local
 publish/
 *.AppImage
 *.dmg
 
-# IDE
-.vs/
-.idea/
-*.suo
-
-# OS
+## OS
 Thumbs.db
+desktop.ini
 .DS_Store
+
+## Secrets / local config
+*.env
+.env
+secrets.json
+appsettings.Local.json

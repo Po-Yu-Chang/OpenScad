@@ -1,0 +1,107 @@
+{
+  "$schema": "../../schemas/feature.schema.json",
+  "schema_version": "1.0",
+  "features": [
+    {
+      "feature_id": "bottom_sketch",
+      "type": "sketch",
+      "name": "Bottom Plate Sketch",
+      "sketch_entities": [
+        {
+          "entity_id": "rect_1",
+          "entity_type": "rectangle",
+          "parameters": {
+            "width": 32.0,
+            "height": 45.0,
+            "center_x": 0,
+            "center_y": 0
+          }
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "feature_id": "bottom_pad",
+      "type": "pad",
+      "name": "Bottom Plate",
+      "input": "bottom_sketch",
+      "references": ["bottom_sketch"],
+      "parameters": {
+        "length": 7.5
+      },
+      "validation": {
+        "must_be_single_solid": true,
+        "min_thickness_mm": 5
+      }
+    },
+    {
+      "feature_id": "wall_shell",
+      "type": "shell",
+      "name": "Walls (Shell)",
+      "input": "bottom_pad",
+      "references": ["bottom_pad"],
+      "parameters": {
+        "thickness": 2.0
+      }
+    },
+    {
+      "feature_id": "lens_hole",
+      "type": "hole",
+      "name": "Lens Hole",
+      "input": "wall_shell",
+      "references": ["wall_shell"],
+      "parameters": {
+        "diameter": 10.0,
+        "through_all": true,
+        "positions": [[0, 20.0]]
+      }
+    },
+    {
+      "feature_id": "vent_holes",
+      "type": "hole",
+      "name": "Ventilation Holes",
+      "input": "lens_hole",
+      "references": ["lens_hole"],
+      "parameters": {
+        "diameter": 3.0,
+        "through_all": true,
+        "positions": [
+          [-10.0, -19.0],
+          [-6.0, -19.0],
+          [-2.0, -19.0],
+          [2.0, -19.0],
+          [6.0, -19.0],
+          [10.0, -19.0]
+        ]
+      },
+      "validation": {
+        "expected_hole_count": 6
+      }
+    },
+    {
+      "feature_id": "mount_screws",
+      "type": "hole",
+      "name": "M2 Mount Screws",
+      "input": "vent_holes",
+      "references": ["vent_holes"],
+      "parameters": {
+        "through_all": true,
+        "positions": [
+          [12.5, 19.0],
+          [-12.5, 19.0],
+          [-12.5, -19.0],
+          [12.5, -19.0]
+        ]
+      },
+      "standard_parts": {
+        "fastener": {
+          "standard": "M2",
+          "fit": "close"
+        }
+      },
+      "validation": {
+        "expected_hole_count": 4
+      }
+    }
+  ]
+}

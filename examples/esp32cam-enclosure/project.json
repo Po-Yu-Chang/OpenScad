@@ -1,0 +1,13 @@
+{
+  "$schema": "../../schemas/project.schema.json",
+  "schema_version": "1.0",
+  "project_id": "esp32cam-enclosure",
+  "name": "ESP32-CAM Enclosure",
+  "description": "ESP32-CAM 攝影模組外殼",
+  "created_at": "2026-07-10T00:00:00Z",
+  "modified_at": "2026-07-10T00:00:00Z",
+  "units": "mm",
+  "engine": "build123d",
+  "features_file": "features.json",
+  "parameters_file": "parameters.json"
+}

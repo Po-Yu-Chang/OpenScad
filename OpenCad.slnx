@@ -1,0 +1,13 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/OpenCad.Application/OpenCad.Application.csproj" />
+    <Project Path="src/OpenCad.Desktop/OpenCad.Desktop.csproj" />
+    <Project Path="src/OpenCad.Domain/OpenCad.Domain.csproj" />
+    <Project Path="src/OpenCad.Infrastructure/OpenCad.Infrastructure.csproj" />
+    <Project Path="src/OpenCad.Llm/OpenCad.Llm.csproj" />
+    <Project Path="src/OpenCad.Viewer/OpenCad.Viewer.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/OpenCad.Tests/OpenCad.Tests.csproj" />
+  </Folder>
+</Solution>

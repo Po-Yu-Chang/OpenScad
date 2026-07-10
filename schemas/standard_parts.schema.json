@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://opencad.dev/schemas/standard_parts.schema.json",
+  "title": "OpenCad Standard Parts Data",
+  "description": "標準件資料表——LLM 只選擇標準與等級，數值一律查表。與 Command Schema 一起版本控管。",
+  "version": "1.0",
+  "iso_273_clearance_holes": {
+    "description": "ISO 273 間隙孔直徑（mm），依螺紋與配合等級",
+    "close": {
+      "M2": 2.20,
+      "M2.5": 2.70,
+      "M3": 3.20,
+      "M4": 4.30,
+      "M5": 5.30,
+      "M6": 6.40,
+      "M8": 8.40,
+      "M10": 10.50,
+      "M12": 13.00
+    },
+    "normal_clearance": {
+      "M2": 2.40,
+      "M2.5": 2.90,
+      "M3": 3.40,
+      "M4": 4.50,
+      "M5": 5.50,
+      "M6": 6.60,
+      "M8": 9.00,
+      "M10": 11.00,
+      "M12": 13.50
+    },
+    "loose_clearance": {
+      "M2": 2.60,
+      "M2.5": 3.10,
+      "M3": 3.60,
+      "M4": 4.80,
+      "M5": 5.80,
+      "M6": 7.00,
+      "M8": 10.00,
+      "M10": 12.00,
+      "M12": 14.50
+    }
+  },
+  "counterbore_dimensions": {
+    "description": "ISO 4762 內六角螺絲用沉頭孔（mm）",
+    "M2": { "diameter": 4.5, "depth": 2.0, "clearance": 2.40 },
+    "M2.5": { "diameter": 5.5, "depth": 2.5, "clearance": 2.90 },
+    "M3": { "diameter": 6.0, "depth": 3.0, "clearance": 3.40 },
+    "M4": { "diameter": 8.0, "depth": 4.0, "clearance": 4.50 },
+    "M5": { "diameter": 9.5, "depth": 5.0, "clearance": 5.50 },
+    "M6": { "diameter": 11.0, "depth": 6.0, "clearance": 6.60 },
+    "M8": { "diameter": 15.0, "depth": 8.0, "clearance": 9.00 },
+    "M10": { "diameter": 18.0, "depth": 10.0, "clearance": 11.00 },
+    "M12": { "diameter": 22.0, "depth": 12.0, "clearance": 13.50 }
+  },
+  "nema_mounting": {
+    "description": "NEMA 馬達安裝尺寸（mm）",
+    "NEMA8": { "bolt_circle_diameter": 12.0, "bolt_hole_diameter": 1.6, "pilot_diameter": 8.0, "frame_size": 20.3 },
+    "NEMA11": { "bolt_circle_diameter": 18.0, "bolt_hole_diameter": 2.0, "pilot_diameter": 11.0, "frame_size": 28.2 },
+    "NEMA14": { "bolt_circle_diameter": 22.0, "bolt_hole_diameter": 2.5, "pilot_diameter": 14.0, "frame_size": 35.3 },
+    "NEMA17": { "bolt_hole_spacing_x": 31.0, "bolt_hole_spacing_y": 31.0, "bolt_hole_diameter": 3.0, "pilot_diameter": 22.0, "frame_size": 42.3 },
+    "NEMA23": { "bolt_hole_spacing_x": 47.14, "bolt_hole_spacing_y": 47.14, "bolt_hole_diameter": 5.0, "pilot_diameter": 38.1, "frame_size": 56.4 },
+    "NEMA34": { "bolt_hole_spacing_x": 69.58, "bolt_hole_spacing_y": 69.58, "bolt_hole_diameter": 5.5, "pilot_diameter": 73.0, "frame_size": 86.0 }
+  }
+}

@@ -1,0 +1,196 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://opencad.dev/schemas/feature.schema.json",
+  "title": "OpenCad Feature Graph File",
+  "description": "features.json——Feature Graph 的持久化格式，包含 schema_version 與特徵陣列",
+  "type": "object",
+  "required": ["schema_version", "features"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "features": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/feature" }
+    }
+  },
+  "definitions": {
+    "parameter_value": {
+      "oneOf": [
+        { "type": "number" },
+        {
+          "type": "object",
+          "properties": {
+            "value": { "type": "number" },
+            "unit": {
+              "type": "string",
+              "enum": ["mm", "cm", "m", "inch", "deg", "rad"]
+            }
+          },
+          "required": ["value", "unit"]
+        },
+        { "type": "string" },
+        { "type": "boolean" },
+        { "type": "array" }
+      ]
+    },
+    "sketch_entity": {
+      "type": "object",
+      "properties": {
+        "entity_id": { "type": "string" },
+        "entity_type": {
+          "type": "string",
+          "enum": ["point", "line", "circle", "arc", "rectangle", "slot", "polygon", "construction_line"]
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/parameter_value" }
+        }
+      },
+      "required": ["entity_id", "entity_type"]
+    },
+    "constraint": {
+      "type": "object",
+      "properties": {
+        "constraint_id": { "type": "string" },
+        "type": {
+          "type": "string",
+          "enum": [
+            "horizontal",
+            "vertical",
+            "parallel",
+            "perpendicular",
+            "concentric",
+            "tangent",
+            "coincident",
+            "equal_length",
+            "distance",
+            "radius",
+            "diameter",
+            "angle",
+            "symmetric"
+          ]
+        },
+        "targets": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "受約束的草圖實體 ID"
+        },
+        "value": { "$ref": "#/definitions/parameter_value" },
+        "metadata": {
+          "type": "object",
+          "description": "宣告式中繼資料（第一版 build123d 不求解，僅供驗證與日後遷移）",
+          "properties": {
+            "verified": { "type": "boolean" }
+          }
+        }
+      },
+      "required": ["constraint_id", "type", "targets"]
+    },
+    "feature": {
+      "type": "object",
+      "required": ["feature_id", "type", "name"],
+      "properties": {
+        "feature_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "唯一且穩定的特徵識別碼"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "sketch",
+            "pad",
+            "pocket",
+            "revolve",
+            "hole",
+            "linear_pattern",
+            "circular_pattern",
+            "mirror",
+            "fillet",
+            "chamfer",
+            "shell",
+            "boolean_union",
+            "boolean_difference",
+            "boolean_intersection"
+          ]
+        },
+        "name": {
+          "type": "string",
+          "description": "人類可讀特徵名稱"
+        },
+        "input": {
+          "type": "string",
+          "description": "輸入參照特徵 ID（如草圖或實體）"
+        },
+        "references": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "依賴特徵 ID 列表"
+        },
+        "sketch_entities": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/sketch_entity" },
+          "description": "草圖實體（sketch 類型使用）"
+        },
+        "constraints": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/constraint" },
+          "description": "草圖約束（宣告式中繼資料）"
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/parameter_value" },
+          "description": "特徵參數"
+        },
+        "standard_parts": {
+          "type": "object",
+          "description": "標準件參考（如 M5 間隙孔，由引擎查表）"
+        },
+        "validation": {
+          "type": "object",
+          "description": "驗證條件",
+          "properties": {
+            "min_thickness_mm": { "type": "number" },
+            "must_be_single_solid": { "type": "boolean" },
+            "expected_hole_count": { "type": "integer" },
+            "expected_bounding_box": {
+              "type": "object",
+              "properties": {
+                "min": {
+                  "type": "array",
+                  "items": { "type": "number" },
+                  "minItems": 3
+                },
+                "max": {
+                  "type": "array",
+                  "items": { "type": "number" },
+                  "minItems": 3
+                }
+              }
+            }
+          }
+        },
+        "source": {
+          "type": "string",
+          "enum": ["llm", "user", "imported"],
+          "description": "建立來源"
+        },
+        "llm_description": {
+          "type": "string",
+          "description": "LLM 設計說明"
+        },
+        "rebuild_status": {
+          "type": "string",
+          "enum": ["pending", "building", "success", "failed"],
+          "description": "重建狀態"
+        },
+        "error_message": {
+          "type": "string",
+          "description": "錯誤訊息（重建失敗時）"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenCad 3D Viewer</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { width: 100%; height: 100%; overflow: hidden; background: #1e1e2e; }
+        #viewport { width: 100%; height: 100%; }
+        #loading {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            color: #cdd6f4; font-family: sans-serif; font-size: 14px;
+            display: none;
+        }
+        #info {
+            position: absolute; bottom: 10px; left: 10px;
+            color: #a6adc8; font-family: monospace; font-size: 12px;
+            pointer-events: none;
+        }
+        #highlight-indicator {
+            position: absolute; top: 10px; right: 10px;
+            color: #f9e2af; font-family: sans-serif; font-size: 12px;
+            display: none;
+            background: rgba(30,30,46,0.8); padding: 4px 12px; border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div id="viewport"></div>
+    <div id="loading">載入模型中...</div>
+    <div id="highlight-indicator"></div>
+    <div id="info"></div>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "./assets/three/three.module.js",
+            "three/addons/": "./assets/three/addons/"
+        }
+    }
+    </script>
+
+    <script type="module">
+        // ─── 跨平台訊息橋接 ───
+        // 統一入口：不論 WebView2 (Windows)、WKWebView (macOS)、WebKitGTK (Linux)
+        // 都透過同一個函式發送訊息。訊息也推入佇列供 C# 端輪詢讀取。
+        window._opencadMessageQueue = [];
+        window.opencadNotify = function(msg) {
+            // 推入佇列供 C# ExecuteScriptAsync 輪詢
+            window._opencadMessageQueue.push(JSON.stringify(msg));
+            // 嘗試原生橋接（三平台皆可能可用）
+            try { window.chrome?.webview?.postMessage(msg); } catch (e) {}
+            try { window.webkit?.messageHandlers?.opencad?.postMessage(msg); } catch (e) {}
+            try { window.opencad?.postMessage(msg); } catch (e) {}
+        };
+        // C# 端呼叫此函式取出並清空佇列
+        window.opencadDrainMessages = function() {
+            var q = window._opencadMessageQueue || [];
+            window._opencadMessageQueue = [];
+            return JSON.stringify(q);
+        };
+
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+        // ─── 場景設定 ───
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x1e1e2e);
+
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 10000);
+        camera.position.set(100, 80, 100);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        document.getElementById('viewport').appendChild(renderer.domElement);
+
+        // ─── 控制器 ───
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+
+        // ─── 光源 ───
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+        scene.add(ambientLight);
+
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        dirLight.position.set(100, 200, 100);
+        dirLight.castShadow = true;
+        dirLight.shadow.mapSize.width = 2048;
+        dirLight.shadow.mapSize.height = 2048;
+        scene.add(dirLight);
+
+        const dirLight2 = new THREE.DirectionalLight(0xffffff, 0.3);
+        dirLight2.position.set(-100, 100, -100);
+        scene.add(dirLight2);
+
+        // ─── 格線 ───
+        const grid = new THREE.GridHelper(500, 50, 0x45475a, 0x313244);
+        scene.add(grid);
+
+        // ─── 選取輔助 ───
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+        let highlightedMesh = null;
+        let originalMaterial = null;
+
+        renderer.domElement.addEventListener('click', (event) => {
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObjects(scene.children, true);
+            for (const intersect of intersects) {
+                if (intersect.object.isMesh && intersect.object !== grid) {
+                    // 高亮選取
+                    if (highlightedMesh && originalMaterial) {
+                        highlightedMesh.material = originalMaterial;
+                    }
+                    highlightedMesh = intersect.object;
+                    originalMaterial = intersect.object.material.clone();
+                    intersect.object.material = new THREE.MeshStandardMaterial({
+                        color: 0xf9e2af,
+                        metalness: 0.3,
+                        roughness: 0.4,
+                    });
+                    // 通知主程式
+                    window.opencadNotify({
+                        type: 'selection',
+                        object: intersect.object.name || 'unknown',
+                    });
+                    document.getElementById('highlight-indicator').textContent = `已選取: ${intersect.object.name || '模型'}`;
+                    document.getElementById('highlight-indicator').style.display = 'block';
+                    break;
+                }
+            }
+        });
+
+        // ─── 模型載入 ───
+        const loader = new GLTFLoader();
+        let currentModel = null;
+
+        window.loadModel = function(url) {
+            document.getElementById('loading').style.display = 'block';
+            // 清除舊模型
+            if (currentModel) {
+                scene.remove(currentModel);
+                currentModel = null;
+            }
+
+            loader.load(url, (gltf) => {
+                currentModel = gltf.scene;
+
+                // 居中並調整大小
+                const box = new THREE.Box3().setFromObject(currentModel);
+                const center = box.getCenter(new THREE.Vector3());
+                const size = box.getSize(new THREE.Vector3());
+                const maxDim = Math.max(size.x, size.y, size.z);
+                const scale = 100 / maxDim;
+
+                currentModel.scale.setScalar(scale);
+                currentModel.position.sub(center.multiplyScalar(scale));
+
+                // 為每個 Mesh 設定陰影和名稱
+                currentModel.traverse((child) => {
+                    if (child.isMesh) {
+                        child.castShadow = true;
+                        child.receiveShadow = true;
+                        if (!child.name) child.name = 'mesh_' + child.id;
+                    }
+                });
+
+                scene.add(currentModel);
+                document.getElementById('loading').style.display = 'none';
+
+                // 更新資訊
+                document.getElementById('info').textContent =
+                    `模型尺寸: ${(size.x).toFixed(1)} × ${(size.y).toFixed(1)} × ${(size.z).toFixed(1)} mm`;
+
+                // 通知主程式
+                window.opencadNotify({
+                    type: 'loaded',
+                    size: { x: size.x, y: size.y, z: size.z },
+                });
+            }, (progress) => {
+                const pct = (progress.loaded / progress.total * 100).toFixed(0);
+                document.getElementById('loading').textContent = `載入中... ${pct}%`;
+            }, (error) => {
+                document.getElementById('loading').textContent = '載入失敗';
+                console.error('GLB 載入失敗:', error);
+                window.opencadNotify({ type: 'error', message: String(error) });
+            });
+        };
+
+        // ─── 視角控制 API ───
+        window.setView = function(view) {
+            const box = currentModel ? new THREE.Box3().setFromObject(currentModel) : null;
+            const dist = 200;
+            switch(view) {
+                case 'iso':
+                    camera.position.set(dist, dist * 0.7, dist);
+                    break;
+                case 'front':
+                    camera.position.set(0, 0, dist);
+                    break;
+                case 'top':
+                    camera.position.set(0, dist, 0);
+                    break;
+                case 'right':
+                    camera.position.set(dist, 0, 0);
+                    break;
+            }
+            controls.target.set(0, 0, 0);
+            controls.update();
+        };
+
+        window.clearHighlight = function() {
+            if (highlightedMesh && originalMaterial) {
+                highlightedMesh.material = originalMaterial;
+                highlightedMesh = null;
+                originalMaterial = null;
+            }
+            document.getElementById('highlight-indicator').style.display = 'none';
+        };
+
+        // ─── 動畫迴圈 ───
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        // ─── 視窗大小調整 ───
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>

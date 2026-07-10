@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://opencad.dev/schemas/command.schema.json",
+  "title": "OpenCad Command",
+  "description": "受控命令格式，LLM 產生此 JSON，由確定性執行器處理。LLM 不得直接產生 Python 或 OpenSCAD 程式碼。",
+  "type": "object",
+  "required": ["schema_version", "action"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0",
+      "description": "命令結構描述版本"
+    },
+    "action": {
+      "type": "string",
+      "enum": [
+        "create_project",
+        "create_feature",
+        "update_feature",
+        "delete_feature",
+        "rebuild",
+        "export",
+        "validate"
+      ],
+      "description": "命令類型"
+    },
+    "document_id": {
+      "type": "string",
+      "description": "目標專案識別碼"
+    },
+    "target_feature_id": {
+      "type": "string",
+      "description": "目標特徵識別碼（update_feature / delete_feature 使用）"
+    },
+    "feature": {
+      "$ref": "feature.schema.json#/definitions/feature",
+      "description": "特徵定義（create_feature 使用）"
+    },
+    "parameters": {
+      "type": "object",
+      "description": "參數更新（update_feature 使用）",
+      "additionalProperties": {
+        "oneOf": [
+          { "type": "number" },
+          { "type": "string" },
+          { "type": "boolean" },
+          {
+            "type": "object",
+            "properties": {
+              "value": { "type": "number" },
+              "unit": { "type": "string" }
+            },
+            "required": ["value"]
+          },
+          { "type": "array" }
+        ]
+      }
+    },
+    "preserve": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "修改時必須保持不變的特徵或屬性路徑"
+    },
+    "export_format": {
+      "type": "string",
+      "enum": ["step", "stl", "3mf", "glb", "png", "all"],
+      "description": "匯出格式（export 使用）"
+    },
+    "standard_parts": {
+      "type": "object",
+      "description": "標準件參考，由引擎內建資料表查得實際數值",
+      "properties": {
+        "fastener": {
+          "type": "object",
+          "properties": {
+            "standard": {
+              "type": "string",
+              "enum": ["M2", "M2.5", "M3", "M4", "M5", "M6", "M8", "M10", "M12"],
+              "description": "螺絲標準"
+            },
+            "fit": {
+              "type": "string",
+              "enum": ["close", "normal_clearance", "loose_clearance"],
+              "description": "配合等級（ISO 273）"
+            },
+            "type": {
+              "type": "string",
+              "enum": ["through_hole", "counterbore", "countersink", "threaded"],
+              "description": "孔類型"
+            }
+          }
+        },
+        "nema": {
+          "type": "object",
+          "properties": {
+            "size": {
+              "type": "string",
+              "enum": ["NEMA8", "NEMA11", "NEMA14", "NEMA17", "NEMA23", "NEMA34"],
+              "description": "NEMA 馬達尺寸"
+            }
+          }
+        }
+      }
+    },
+    "reasoning": {
+      "type": "string",
+      "description": "LLM 的設計理由（供使用者審查）"
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "action": { "const": "create_feature" } } },
+      "then": { "required": ["document_id", "feature"] }
+    },
+    {
+      "if": { "properties": { "action": { "const": "update_feature" } } },
+      "then": { "required": ["document_id", "target_feature_id", "parameters"] }
+    },
+    {
+      "if": { "properties": { "action": { "const": "delete_feature" } } },
+      "then": { "required": ["document_id", "target_feature_id"] }
+    },
+    {
+      "if": { "properties": { "action": { "const": "export" } } },
+      "then": { "required": ["document_id", "export_format"] }
+    },
+    {
+      "if": { "properties": { "action": { "const": "rebuild" } } },
+      "then": { "required": ["document_id"] }
+    },
+    {
+      "if": { "properties": { "action": { "const": "validate" } } },
+      "then": { "required": ["document_id"] }
+    }
+  ]
+}

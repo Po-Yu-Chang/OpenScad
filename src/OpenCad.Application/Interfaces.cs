@@ -1,0 +1,87 @@
+using OpenCad.Domain;
+
+namespace OpenCad.Application;
+
+/// <summary>
+/// LLM 提供者介面。不綁死單一模型，可支援 Ollama、llama.cpp、vLLM 等。
+/// </summary>
+public interface ILlmProvider
+{
+    /// <summary>
+    /// 將設計需求轉成可審查的建模計畫。
+    /// </summary>
+    Task<DesignPlan> CreatePlanAsync(DesignContext context);
+
+    /// <summary>
+    /// 將建模計畫轉成受控 JSON Command。
+    /// </summary>
+    Task<CadCommand> CreateCommandAsync(DesignPlan plan);
+
+    /// <summary>
+    /// 讀取幾何檢查報告並提出修正建議。
+    /// </summary>
+    Task<ReviewResult> ReviewResultAsync(ValidationReport report);
+}
+
+/// <summary>
+/// 設計上下文——包含使用者需求與目前專案狀態。
+/// </summary>
+public class DesignContext
+{
+    public string UserRequest { get; set; } = string.Empty;
+    public string? CurrentProjectId { get; set; }
+    public FeatureGraph? CurrentGraph { get; set; }
+    public List<string> AvailableStandards { get; set; } = new();
+}
+
+/// <summary>
+/// LLM 審查結果。
+/// </summary>
+public class ReviewResult
+{
+    public bool Passed { get; set; }
+    public string Summary { get; set; } = string.Empty;
+    public List<string> Issues { get; set; } = new();
+    public CadCommand? SuggestedFix { get; set; }
+}
+
+/// <summary>
+/// CAD Worker 介面——與 Python 幾何引擎的通訊合約。
+/// </summary>
+public interface ICadWorker
+{
+    /// <summary>建立專案。</summary>
+    Task<string> CreateProjectAsync(string name, string description = "");
+
+    /// <summary>套用受控命令。</summary>
+    Task<CommandResult> ApplyCommandAsync(string projectId, CadCommand command);
+
+    /// <summary>重建模型。</summary>
+    Task<RebuildResult> RebuildAsync(string projectId);
+
+    /// <summary>驗證模型。</summary>
+    Task<ValidationReport> ValidateAsync(string projectId);
+
+    /// <summary>匯出模型。</summary>
+    Task<string> ExportAsync(string projectId, string format);
+
+    /// <summary>取得 GLB 預覽的 URL。</summary>
+    string GetPreviewUrl(string projectId);
+}
+
+public class CommandResult
+{
+    public string Status { get; set; } = string.Empty;
+    public string? FeatureId { get; set; }
+    public string? ErrorCode { get; set; }
+    public string? EngineMessage { get; set; }
+    public List<string>? AffectedFeatures { get; set; }
+}
+
+public class RebuildResult
+{
+    public string Status { get; set; } = string.Empty;
+    public int FeatureCount { get; set; }
+    public string? ErrorCode { get; set; }
+    public string? EngineMessage { get; set; }
+}

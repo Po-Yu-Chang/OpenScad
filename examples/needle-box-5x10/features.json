@@ -1,0 +1,84 @@
+{
+  "$schema": "../../schemas/feature.schema.json",
+  "schema_version": "1.0",
+  "features": [
+    {
+      "feature_id": "outer_sketch",
+      "type": "sketch",
+      "name": "Outer Box Sketch",
+      "sketch_entities": [
+        {
+          "entity_id": "rect_1",
+          "entity_type": "rectangle",
+          "parameters": {
+            "width": 96.5,
+            "height": 51.5,
+            "center_x": 0,
+            "center_y": 0
+          }
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "feature_id": "outer_pad",
+      "type": "pad",
+      "name": "Outer Box",
+      "input": "outer_sketch",
+      "references": ["outer_sketch"],
+      "parameters": {
+        "length": 30.0
+      },
+      "validation": {
+        "must_be_single_solid": true
+      }
+    },
+    {
+      "feature_id": "shell_box",
+      "type": "shell",
+      "name": "Shell (hollow out)",
+      "input": "outer_pad",
+      "references": ["outer_pad"],
+      "parameters": {
+        "thickness": 1.5
+      }
+    },
+    {
+      "feature_id": "cell_grid",
+      "type": "pocket",
+      "name": "Cell Grid Holes",
+      "input": "shell_box",
+      "references": ["shell_box"],
+      "parameters": {
+        "diameter": 8.0,
+        "depth": 28.0,
+        "positions": [
+          [-41.25, -17.5], [-31.75, -17.5], [-22.25, -17.5], [-12.75, -17.5], [-3.25, -17.5],
+          [6.25, -17.5], [15.75, -17.5], [25.25, -17.5], [34.75, -17.5], [44.25, -17.5],
+          [-41.25, -8.0], [-31.75, -8.0], [-22.25, -8.0], [-12.75, -8.0], [-3.25, -8.0],
+          [6.25, -8.0], [15.75, -8.0], [25.25, -8.0], [34.75, -8.0], [44.25, -8.0],
+          [-41.25, 1.5], [-31.75, 1.5], [-22.25, 1.5], [-12.75, 1.5], [-3.25, 1.5],
+          [6.25, 1.5], [15.75, 1.5], [25.25, 1.5], [34.75, 1.5], [44.25, 1.5],
+          [-41.25, 11.0], [-31.75, 11.0], [-22.25, 11.0], [-12.75, 11.0], [-3.25, 11.0],
+          [6.25, 11.0], [15.75, 11.0], [25.25, 11.0], [34.75, 11.0], [44.25, 11.0],
+          [-41.25, 20.5], [-31.75, 20.5], [-22.25, 20.5], [-12.75, 20.5], [-3.25, 20.5],
+          [6.25, 20.5], [15.75, 20.5], [25.25, 20.5], [34.75, 20.5], [44.25, 20.5]
+        ]
+      },
+      "validation": {
+        "expected_hole_count": 50
+      }
+    },
+    {
+      "feature_id": "fillet_corners",
+      "type": "fillet",
+      "name": "Fillet Corners",
+      "input": "cell_grid",
+      "references": ["cell_grid"],
+      "parameters": {
+        "radius": 0.5,
+        "edges": "top"
+      }
+    }
+  ]
+}

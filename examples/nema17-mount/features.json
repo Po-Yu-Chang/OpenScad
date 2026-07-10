@@ -1,0 +1,86 @@
+{
+  "$schema": "../../schemas/feature.schema.json",
+  "schema_version": "1.0",
+  "features": [
+    {
+      "feature_id": "base_sketch",
+      "type": "sketch",
+      "name": "Base Sketch",
+      "sketch_entities": [
+        {
+          "entity_id": "rect_1",
+          "entity_type": "rectangle",
+          "parameters": {
+            "width": 67.0,
+            "height": 67.0,
+            "center_x": 0,
+            "center_y": 0
+          }
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "feature_id": "base_pad",
+      "type": "pad",
+      "name": "Base Block",
+      "input": "base_sketch",
+      "references": ["base_sketch"],
+      "parameters": {
+        "length": 5.0
+      },
+      "validation": {
+        "must_be_single_solid": true,
+        "min_thickness_mm": 3
+      }
+    },
+    {
+      "feature_id": "center_bore",
+      "type": "hole",
+      "name": "Center Bore",
+      "input": "base_pad",
+      "references": ["base_pad"],
+      "parameters": {
+        "diameter": 22.0,
+        "through_all": true,
+        "positions": [[0, 0]]
+      }
+    },
+    {
+      "feature_id": "mount_holes",
+      "type": "hole",
+      "name": "NEMA17 Mount Holes",
+      "input": "center_bore",
+      "references": ["center_bore"],
+      "parameters": {
+        "through_all": true,
+        "positions": [
+          [15.5, 15.5],
+          [-15.5, 15.5],
+          [-15.5, -15.5],
+          [15.5, -15.5]
+        ]
+      },
+      "standard_parts": {
+        "fastener": {
+          "standard": "M3",
+          "fit": "normal_clearance"
+        }
+      },
+      "validation": {
+        "expected_hole_count": 5
+      }
+    },
+    {
+      "feature_id": "fillet_edges",
+      "type": "fillet",
+      "name": "Fillet Edges",
+      "input": "mount_holes",
+      "references": ["mount_holes"],
+      "parameters": {
+        "radius": 2.0,
+        "edges": "all_vertical"
+      }
+    }
+  ]
+}

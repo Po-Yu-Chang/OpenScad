@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://opencad.dev/schemas/project.schema.json",
+  "title": "OpenCad Project Manifest",
+  "description": "專案 manifest.json，描述專案基本資訊與設定",
+  "type": "object",
+  "required": ["schema_version", "project_id", "name", "created_at", "units"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "project_id": {
+      "type": "string",
+      "description": "專案唯一識別碼"
+    },
+    "name": {
+      "type": "string",
+      "description": "專案名稱"
+    },
+    "description": {
+      "type": "string",
+      "description": "專案描述"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "modified_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "units": {
+      "type": "string",
+      "enum": ["mm", "cm", "m", "inch"],
+      "default": "mm",
+      "description": "專案預設單位（內部一律以 mm 為正準單位）"
+    },
+    "engine": {
+      "type": "string",
+      "enum": ["build123d", "freecad"],
+      "default": "build123d",
+      "description": "建模引擎"
+    },
+    "llm_model": {
+      "type": "string",
+      "description": "使用的 LLM 模型名稱"
+    },
+    "llm_provider": {
+      "type": "string",
+      "enum": ["ollama", "llama_cpp", "vllm"],
+      "description": "LLM 提供者"
+    }
+  }
+}

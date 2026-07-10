@@ -1,0 +1,10 @@
+{
+  "rows": { "value": 5, "type": "int", "unit": "count" },
+  "cols": { "value": 10, "type": "int", "unit": "count" },
+  "cell_size": { "value": 8.0, "type": "float", "unit": "mm" },
+  "wall_thickness": { "value": 1.5, "type": "float", "unit": "mm" },
+  "box_height": { "value": 30.0, "type": "float", "unit": "mm" },
+  "bottom_thickness": { "value": 2.0, "type": "float", "unit": "mm" },
+  "lid_height": { "value": 5.0, "type": "float", "unit": "mm" },
+  "fillet_radius": { "value": 1.0, "type": "float", "unit": "mm" }
+}
