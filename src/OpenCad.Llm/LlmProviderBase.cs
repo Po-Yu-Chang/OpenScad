@@ -113,11 +113,14 @@ public abstract class LlmProviderBase : ILlmProvider
 各特徵參數說明：
 - fillet：radius(mm)、edges(預設 all；可選 all_vertical/all_horizontal/top/bottom)。
 - chamfer：length(mm)、edges(同上)。
-- hole：diameter(mm) 或 standard_parts.fastener.standard(如 M3/M5)+fit(normal_clearance 等)；
+- hole：diameter(mm，直徑) 或 standard_parts.fastener.standard(如 M3/M5)+fit(normal_clearance 等)；
   through_all(true/false)、depth(mm，盲孔用)；hole_type(""simple""或""counterbore"")；
-  positions 為 [[x,y],...] 座標列表，用於多孔排列（如四個固定孔）。
+  positions 為 [[x,y],...] 座標列表，用於多孔排列（如四個固定孔），中心單孔用 [[0,0]]。
+  重要：使用者說 radius(半徑) 時，diameter = radius × 2（如 radius 3mm → diameter 6mm）。
   重要：孔的陣列/排列一律使用 hole 的 positions 參數列表，不要使用 linear_pattern 或 circular_pattern（Pattern 僅支援實體特徵，不支援切除）。
 - pocket：through_all(true) 或 depth(mm)；需要前置 sketch 或直接用 positions+diameter。
+  重要：在修改流程中（create_feature 單一特徵），挖圓孔一律用 hole（diameter + positions），不要用 pocket。
+  pocket 僅適用於非圓形切除（如矩形槽、不規則槽），且必須在 feature.references 中指向一個已有的 sketch 特徵 ID 作為輪廓。
 - shell：thickness(mm)。
 - mirror：input=要鏡射的實體特徵 ID；目前固定對 XZ 平面鏡射。
 - revolve：angle(度，預設 360)；需要前置 sketch 步驟。
@@ -261,6 +264,9 @@ public abstract class LlmProviderBase : ILlmProvider
         "    使用者說「刪除」「取消」「刪掉」某特徵時，用 delete_feature + target_feature_id，不要用 update_feature。\n" +
         "15. 孔的陣列/排列：hole 特徵的 positions 參數為 [[x,y],...] 座標列表，可直接建立多孔排列（如四個固定孔）。\n" +
         "    重要：孔的排列一律使用 positions，不要使用 linear_pattern 或 circular_pattern（Pattern 僅支援實體特徵，不支援切除）。\n" +
-        "16. 目前不支援的功能：rib（加強肋）、draft（拔模角）。如果使用者要求這些，在 reasoning 中說明不支援，action 設為 rebuild（不變更模型）。\n\n" +
+        "16. 目前不支援的功能：rib（加強肋）、draft（拔模角）。如果使用者要求這些，在 reasoning 中說明不支援，action 設為 rebuild（不變更模型）。\n" +
+        "17. 修改流程中挖圓孔/貫穿孔：一律使用 hole 特徵（diameter + positions），不要用 pocket。\n" +
+        "    pocket 需要 references 指向已有的 sketch 特徵作為輪廓，修改流程中無法同時建立 sketch + pocket 兩個特徵。\n" +
+        "    hole 的 positions 用 [[x,y],...] 格式，中心孔用 [[0,0]]。diameter 是直徑(mm)，radius 是半徑——注意換算（radius 3mm = diameter 6mm）。\n" +
         "重要：你的輸出必須是合法 JSON，符合指定的 Schema。";
 }

@@ -1192,6 +1192,10 @@ public class MainViewModel : INotifyPropertyChanged
                     ["type"] = feat.Type.ToString().ToLowerInvariant(),
                     ["input"] = feat.Input ?? "",
                 };
+                if (feat.References != null && feat.References.Count > 0)
+                    afterCreate["references"] = string.Join(", ", feat.References);
+                if (feat.SketchEntities != null && feat.SketchEntities.Count > 0)
+                    afterCreate["sketch_entities"] = $"{feat.SketchEntities.Count} 個草圖實體";
                 foreach (var kvp in feat.Parameters)
                     afterCreate[kvp.Key] = kvp.Value;
 
