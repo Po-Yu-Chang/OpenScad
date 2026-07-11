@@ -1,4 +1,4 @@
-# OpenCad UI 冒煙測試——以 UIAutomation 驅動真實視窗驗證垂直切片。
+﻿# OpenCad UI 冒煙測試——以 UIAutomation 驅動真實視窗驗證垂直切片。
 # 用法：powershell -ExecutionPolicy Bypass -File tests\ui\smoke-test.ps1 [-Engine build123d|freecad]
 # 前置：已 dotnet build、Python 環境含 build123d（build123d 引擎）或 FreeCAD（freecad 引擎）。
 # 通過標準：載入範例後 log 出現 rebuild 200 與 preview.glb 200，關閉後無殘留 worker。
@@ -79,10 +79,17 @@ try {
     [SmokeMouse]::SetForegroundWindow((New-Object IntPtr($win.Current.NativeWindowHandle))) | Out-Null
     Start-Sleep -Milliseconds 500
 
-    $menuCond = New-Object System.Windows.Automation.PropertyCondition(
-        [System.Windows.Automation.AutomationElement]::NameProperty, "載入範例▾")
-    $menu = $win.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $menuCond)
-    if (-not $menu) { throw "找不到載入範例選單" }
+    # 以「Name 包含 載入範例」比對，避免 header 空格/箭頭字元微調就失配
+    $miType = New-Object System.Windows.Automation.PropertyCondition(
+        [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+        [System.Windows.Automation.ControlType]::MenuItem)
+    $allMenus = $win.FindAll([System.Windows.Automation.TreeScope]::Descendants, $miType)
+    $menu = $null
+    foreach ($m in $allMenus) { if ($m.Current.Name -like "*載入範例*") { $menu = $m; break } }
+    if (-not $menu) {
+        $names = ($allMenus | ForEach-Object { $_.Current.Name }) -join " | "
+        throw "找不到載入範例選單。現有 MenuItem：$names"
+    }
     $r = $menu.Current.BoundingRectangle
     [SmokeMouse]::Click([int]($r.X + $r.Width/2), [int]($r.Y + $r.Height/2))
     Start-Sleep -Seconds 2
