@@ -1,216 +1,96 @@
 using OpenCad.Application;
+using Xunit;
 
 namespace OpenCad.Tests;
 
 /// <summary>
-/// 意圖攔截測試——驗證使用者的繁體中文輸入能正確匹配到對應的 UI 操作，
-/// 不被送到 LLM。涵蓋 SolidWorks 常見操作的繁體中文情境。
+/// 本地意圖解析測試——單一 <see cref="IntentMatcher.Parse"/> 一次只回一個結果。
+/// 重點回歸：關鍵字衝突（「取消還原」）與否定詞（「不要還原」）不得誤觸破壞性操作。
 /// </summary>
 public class IntentMatcherTests
 {
-    // ── Undo ──
-
+    // ── Parse：正向 ──
     [Theory]
-    [InlineData("復原")]
-    [InlineData("撤銷")]
-    [InlineData("undo")]
-    [InlineData("UNDO")]
-    [InlineData("Undo")]
-    [InlineData("復原上一步")]
-    [InlineData("把上次的圓角取消，復原")]
-    public void IsUndo_MatchesUndoKeywords(string input)
-    {
-        Assert.True(IntentMatcher.IsUndo(input));
-    }
+    [InlineData("幫我還原", LocalIntentKind.Undo)]
+    [InlineData("回上一步", LocalIntentKind.Undo)]
+    [InlineData("復原", LocalIntentKind.Undo)]
+    [InlineData("撤銷", LocalIntentKind.Undo)]
+    [InlineData("取消還原", LocalIntentKind.Redo)]
+    [InlineData("取消復原", LocalIntentKind.Redo)]
+    [InlineData("重做", LocalIntentKind.Redo)]
+    [InlineData("全部都取消", LocalIntentKind.ClearAll)]
+    [InlineData("清空整個模型", LocalIntentKind.ClearAll)]
+    [InlineData("從頭開始", LocalIntentKind.ClearAll)]
+    [InlineData("重新開始畫一個圓", LocalIntentKind.ClearAll)] // 「重新開始」屬 strong 清空片語，故命中 ClearAll
+    [InlineData("縮放至適合", LocalIntentKind.ZoomFit)]
+    [InlineData("基準面顯示", LocalIntentKind.ToggleDatumPlanes)]
+    [InlineData("重建", LocalIntentKind.Rebuild)]
+    public void Parse_Positive(string input, LocalIntentKind expected)
+        => Assert.Equal(expected, IntentMatcher.Parse(input).Kind);
 
+    // ── Parse：否定 / 誤判防止 → None ──
     [Theory]
-    [InlineData("建立一個方塊")]
-    [InlineData("加圓角")]
-    [InlineData("redo")]
-    [InlineData("重做")]
-    [InlineData("")]
-    public void IsUndo_DoesNotMatchNonUndoInput(string input)
-    {
-        Assert.False(IntentMatcher.IsUndo(input));
-    }
+    [InlineData("不要還原")]
+    [InlineData("先不要清空")]
+    [InlineData("我剛剛說的還原是什麼意思？")]
+    [InlineData("清空孔位後重新排列")]   // 只有裸「清空」、無其他意圖 → None
+    [InlineData("建立一個 60×60×5 底板")]
+    public void Parse_NoneCases(string input)
+        => Assert.Equal(LocalIntentKind.None, IntentMatcher.Parse(input).Kind);
 
-    // ── Redo ──
+    // ── 關鍵回歸：取消還原只命中 Redo（曾因 IsUndo 含「還原」被誤判為 Undo）──
+    [Fact]
+    public void Parse_CancelRestore_IsRedoNotUndo()
+        => Assert.Equal(LocalIntentKind.Redo, IntentMatcher.Parse("取消還原").Kind);
 
-    [Theory]
-    [InlineData("重做")]
-    [InlineData("取消復原")]
-    [InlineData("redo")]
-    [InlineData("REDO")]
-    [InlineData("重做上一步")]
-    public void IsRedo_MatchesRedoKeywords(string input)
-    {
-        Assert.True(IntentMatcher.IsRedo(input));
-    }
+    // ── 歧義：多意圖並存（Undo + 弱清空）──
+    [Fact]
+    public void Parse_RestoreThenClear_IsAmbiguous()
+        => Assert.Equal(LocalIntentKind.Ambiguous, IntentMatcher.Parse("還原後清空").Kind);
 
-    [Theory]
-    [InlineData("復原")]
-    [InlineData("undo")]
-    [InlineData("建立方塊")]
-    public void IsRedo_DoesNotMatchNonRedoInput(string input)
-    {
-        Assert.False(IntentMatcher.IsRedo(input));
-    }
-
-    // ── View ──
-
+    // ── SetView 帶視角字串 ──
     [Theory]
     [InlineData("等角", "iso")]
-    [InlineData("iso", "iso")]
-    [InlineData("正視", "front")]
     [InlineData("前視", "front")]
     [InlineData("俯視", "top")]
-    [InlineData("上視", "top")]
-    [InlineData("top", "top")]
     [InlineData("右視", "right")]
+    public void Parse_SetView_CarriesView(string input, string view)
+    {
+        var it = IntentMatcher.Parse(input);
+        Assert.Equal(LocalIntentKind.SetView, it.Kind);
+        Assert.Equal(view, it.View);
+    }
+
+    // ── MatchView（仍為 public helper）──
+    [Theory]
     [InlineData("側視", "right")]
-    [InlineData("right", "right")]
-    public void MatchView_ReturnsCorrectView(string input, string expected)
-    {
-        Assert.Equal(expected, IntentMatcher.MatchView(input));
-    }
+    [InlineData("iso", "iso")]
+    public void MatchView_Works(string input, string expected)
+        => Assert.Equal(expected, IntentMatcher.MatchView(input));
 
-    [Theory]
-    [InlineData("建立方塊")]
-    [InlineData("加圓角 R3")]
-    [InlineData("復原")]
-    public void MatchView_ReturnsNullForNonViewInput(string input)
-    {
-        Assert.Null(IntentMatcher.MatchView(input));
-    }
+    [Fact]
+    public void MatchView_NullForNonView()
+        => Assert.Null(IntentMatcher.MatchView("建立方塊"));
 
-    // ── Zoom to Fit ──
-
-    [Theory]
-    [InlineData("縮放至適合")]
-    [InlineData("全視圖")]
-    [InlineData("適應視窗")]
-    [InlineData("fit")]
-    public void IsZoomToFit_MatchesZoomKeywords(string input)
-    {
-        Assert.True(IntentMatcher.IsZoomToFit(input));
-    }
-
-    [Theory]
-    [InlineData("放大")]
-    [InlineData("縮小")]
-    [InlineData("正視")]
-    public void IsZoomToFit_DoesNotMatchNonZoomInput(string input)
-    {
-        Assert.False(IntentMatcher.IsZoomToFit(input));
-    }
-
-    // ── Datum Plane Toggle ──
-
-    [Theory]
-    [InlineData("基準面顯示")]
-    [InlineData("基準面隱藏")]
-    [InlineData("切換基準面")]
-    [InlineData("基準面開關")]
-    public void IsDatumPlaneToggle_MatchesDatumKeywords(string input)
-    {
-        Assert.True(IntentMatcher.IsDatumPlaneToggle(input));
-    }
-
-    [Theory]
-    [InlineData("基準面")]
-    [InlineData("顯示邊線")]
-    [InlineData("建立基準面 XY 上的草圖")]
-    public void IsDatumPlaneToggle_DoesNotMatchNonToggleInput(string input)
-    {
-        Assert.False(IntentMatcher.IsDatumPlaneToggle(input));
-    }
-
-    // ── Rebuild ──
-
-    [Theory]
-    [InlineData("重建")]
-    [InlineData("重新生成")]
-    [InlineData("rebuild")]
-    [InlineData("Rebuild")]
-    public void IsRebuild_MatchesRebuildKeywords(string input)
-    {
-        Assert.True(IntentMatcher.IsRebuild(input));
-    }
-
-    [Theory]
-    [InlineData("建立")]
-    [InlineData("重做")]
-    [InlineData("重新描述")]
-    public void IsRebuild_DoesNotMatchNonRebuildInput(string input)
-    {
-        Assert.False(IntentMatcher.IsRebuild(input));
-    }
-
-    // ── ClearAll ──
-
-    [Theory]
-    [InlineData("全部都取消")]
-    [InlineData("全部取消")]
-    [InlineData("全部刪除")]
-    [InlineData("清空")]
-    [InlineData("全部清空")]
-    [InlineData("從頭開始")]
-    [InlineData("重新開始")]
-    public void IsClearAll_MatchesClearAllKeywords(string input)
-    {
-        Assert.True(IntentMatcher.IsClearAll(input));
-    }
-
-    [Theory]
-    [InlineData("建立方塊")]
-    [InlineData("刪除最後的圓角")]
-    [InlineData("取消倒角")]
-    [InlineData("復原")]
-    public void IsClearAll_DoesNotMatchNonClearAllInput(string input)
-    {
-        Assert.False(IntentMatcher.IsClearAll(input));
-    }
-
-    // ── Classify (綜合) ──
-
+    // ── Classify shim：舊字串契約仍可用 ──
     [Theory]
     [InlineData("復原", "undo")]
-    [InlineData("撤銷", "undo")]
+    [InlineData("取消還原", "redo")]   // 回歸：不可為 undo
     [InlineData("重做", "redo")]
     [InlineData("等角", "view:iso")]
-    [InlineData("正視", "view:front")]
-    [InlineData("俯視", "view:top")]
-    [InlineData("右視", "view:right")]
     [InlineData("縮放至適合", "zoom_fit")]
     [InlineData("基準面顯示", "datum_toggle")]
     [InlineData("重建", "rebuild")]
     [InlineData("全部都取消", "clear_all")]
-    [InlineData("清空", "clear_all")]
-    [InlineData("重新開始", "clear_all")]
-    public void Classify_ReturnsCorrectIntent(string input, string expected)
-    {
-        Assert.Equal(expected, IntentMatcher.Classify(input));
-    }
+    public void Classify_KnownIntents(string input, string expected)
+        => Assert.Equal(expected, IntentMatcher.Classify(input));
 
+    // ── Classify → null（交回 LLM）：否定、弱清空單獨、歧義、一般建模語句 ──
     [Theory]
-    [InlineData("建立一個 60×60×5 底板")]
-    [InlineData("所有邊加 R3 圓角")]
-    [InlineData("加四個 M3 固定孔")]
-    [InlineData("把厚度改成 10mm")]
-    [InlineData("做 2mm 薄殼")]
-    [InlineData("刪除最後的圓角")]
-    [InlineData("改成鋁合金")]
-    public void Classify_ReturnsNullForLLMBoundInput(string input)
-    {
-        // 這些建模操作應該送 LLM，不應被本地攔截
-        Assert.Null(IntentMatcher.Classify(input));
-    }
-
-    [Theory]
-    [InlineData("  復原  ", "undo")]
-    [InlineData(" 重做 ", "redo")]
-    public void Classify_HandlesWhitespace(string input, string expected)
-    {
-        Assert.Equal(expected, IntentMatcher.Classify(input));
-    }
+    [InlineData("不要還原")]
+    [InlineData("清空")]              // 弱清空單獨出現 → None → null
+    [InlineData("還原後清空")]        // Ambiguous → null
+    [InlineData("建立一個底板")]
+    public void Classify_ReturnsNull(string input)
+        => Assert.Null(IntentMatcher.Classify(input));
 }

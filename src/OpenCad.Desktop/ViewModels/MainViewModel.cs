@@ -1123,85 +1123,51 @@ public class MainViewModel : INotifyPropertyChanged
     // 不送 LLM——這些操作有確定性的 UI 對應，LLM 只會增加延遲和誤判。
     private bool TryHandleLocalIntent(string request)
     {
-        var trimmed = request.Trim();
-
-        // 復原 / 撤銷
-        if (IntentMatcher.IsUndo(trimmed))
+        // 單一 Parse 一次只回一個意圖，避免關鍵字衝突（「取消還原」曾先命中 Undo；「不要還原」曾誤觸）。
+        var intent = IntentMatcher.Parse(request);
+        switch (intent.Kind)
         {
-            if (HasProject && IsWorkerConnected)
-            {
-                _ = UndoAsync();
-            }
-            else
-            {
-                Messages.Add(ChatMessage.Assistant("目前沒有開啟的專案，無法復原。"));
-            }
-            return true;
-        }
+            case LocalIntentKind.Undo:
+                if (HasProject && IsWorkerConnected) _ = UndoAsync();
+                else Messages.Add(ChatMessage.Assistant("目前沒有開啟的專案，無法復原。"));
+                return true;
 
-        // 重做 / 取消復原
-        if (IntentMatcher.IsRedo(trimmed))
-        {
-            if (HasProject && IsWorkerConnected)
-            {
-                _ = RedoAsync();
-            }
-            else
-            {
-                Messages.Add(ChatMessage.Assistant("目前沒有開啟的專案，無法重做。"));
-            }
-            return true;
-        }
+            case LocalIntentKind.Redo:
+                if (HasProject && IsWorkerConnected) _ = RedoAsync();
+                else Messages.Add(ChatMessage.Assistant("目前沒有開啟的專案，無法重做。"));
+                return true;
 
-        // 全部取消 / 清空 / 重新開始
-        if (IntentMatcher.IsClearAll(trimmed))
-        {
-            if (HasProject && IsWorkerConnected)
-            {
-                _ = ClearAllAsync();
-            }
-            else
-            {
-                Messages.Add(ChatMessage.Assistant("目前沒有開啟的專案，無法清空。"));
-            }
-            return true;
-        }
+            case LocalIntentKind.ClearAll:
+                if (HasProject && IsWorkerConnected) _ = ClearAllAsync();
+                else Messages.Add(ChatMessage.Assistant("目前沒有開啟的專案，無法清空。"));
+                return true;
 
-        // 視角操作
-        var viewKeyword = IntentMatcher.MatchView(trimmed);
-        if (viewKeyword != null)
-        {
-            SetView(viewKeyword);
-            return true;
-        }
+            case LocalIntentKind.SetView:
+                SetView(intent.View!);
+                return true;
 
-        // 縮放至適合
-        if (IntentMatcher.IsZoomToFit(trimmed))
-        {
-            ViewerScriptRequested?.Invoke("zoomFit()");
-            Messages.Add(ChatMessage.Assistant("已縮放至適合。"));
-            return true;
-        }
+            case LocalIntentKind.ZoomFit:
+                ViewerScriptRequested?.Invoke("zoomFit()");
+                Messages.Add(ChatMessage.Assistant("已縮放至適合。"));
+                return true;
 
-        // 基準面顯示/隱藏
-        if (IntentMatcher.IsDatumPlaneToggle(trimmed))
-        {
-            ViewerScriptRequested?.Invoke("onToggleDatumPlanes()");
-            Messages.Add(ChatMessage.Assistant("已切換基準面顯示。"));
-            return true;
-        }
+            case LocalIntentKind.ToggleDatumPlanes:
+                ViewerScriptRequested?.Invoke("onToggleDatumPlanes()");
+                Messages.Add(ChatMessage.Assistant("已切換基準面顯示。"));
+                return true;
 
-        // 重建
-        if (IntentMatcher.IsRebuild(trimmed))
-        {
-            if (HasProject && IsWorkerConnected)
-            {
-                _ = RebuildAsync();
-            }
-            return true;
-        }
+            case LocalIntentKind.Rebuild:
+                if (HasProject && IsWorkerConnected) _ = RebuildAsync();
+                return true;
 
-        return false;
+            case LocalIntentKind.Ambiguous:
+                // 多重/衝突意圖：不執行破壞性操作，反問使用者釐清（ChatGPT 計畫 §7.2）。
+                Messages.Add(ChatMessage.Assistant("你的指令似乎同時包含多個操作（例如復原與清空），請分開說明要先做哪一個。"));
+                return true;
+
+            default:
+                return false;
+        }
     }
 
     private async Task ApplyPlanAsync(DesignPlan plan)
