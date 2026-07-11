@@ -23,8 +23,17 @@ public abstract class LlmProviderBase : ILlmProvider
 
     public async Task<DesignPlan> CreatePlanAsync(DesignContext context)
     {
+        // WP-H1: Capability payload — 從 schema 程式生成 feature catalog
+        var capability = await GetCapabilityPayloadAsync();
         var userPrompt = $@"
-使用者需求：{context.UserRequest}
+=== CAPABILITY PAYLOAD (WP-H1) ===
+schema_version: {capability.SchemaVersion}
+engine_version: {capability.EngineVersion}
+支援 feature catalog: {capability.FeatureCatalogJson}
+不支援功能（拒絕規則）: {string.Join(", ", capability.UnsupportedFeatures)}
+
+=== 使用者需求 ===
+{context.UserRequest}
 
 請將此需求拆解成建模步驟。每個步驟描述要建立的特徵類型和參數。
 拆解規則：
@@ -40,6 +49,10 @@ public abstract class LlmProviderBase : ILlmProvider
   [{{""type"":""rectangle"",""width"":10,""height"":5,""center_x"":0,""center_y"":0}}]
   例如「半徑 3mm 圓」的 sketch_entities 必須是：
   [{{""type"":""circle"",""radius"":3,""center_x"":0,""center_y"":0}}]
+- WP1-3 基準幾何：需要 datum plane 時，使用 feature_type=""datum_plane""，parameters 含 method（offset/angle_between/mid_plane）、source_ref（如 ""face:f1.top""）、offset_mm 或 angle_deg。
+  datum_plane 可作為後續 sketch 的草圖平面——plane.base 設為 ""datum:<datum_id>""（如 ""datum:datum_plane_1""）。
+  datum_axis 用 feature_type=""datum_axis""，parameters 含 method（intersection/cylinder_axis）、source_ref、source_ref_2。
+  datum_point 用 feature_type=""datum_point""，parameters 含 method（vertex/center）、source_ref。
 如果需求中有缺少或矛盾的條件，請在 missing_info 中列出。
 回傳 JSON 格式的設計計畫。";
 
@@ -50,9 +63,10 @@ public abstract class LlmProviderBase : ILlmProvider
     ""steps"": { ""type"": ""array"", ""items"": { ""type"": ""object"",
       ""properties"": {
         ""description"": { ""type"": ""string"" },
-        ""feature_type"": { ""type"": ""string"", ""enum"": [""sketch"",""pad"",""pocket"",""hole"",""linear_pattern"",""circular_pattern"",""mirror"",""fillet"",""chamfer"",""shell"",""revolve"",""sweep"",""loft"",""boolean_union"",""boolean_difference"",""boolean_intersection""] },
+        ""feature_type"": { ""type"": ""string"", ""enum"": [""sketch"",""pad"",""pocket"",""hole"",""linear_pattern"",""circular_pattern"",""mirror"",""fillet"",""chamfer"",""shell"",""revolve"",""sweep"",""loft"",""boolean_union"",""boolean_difference"",""boolean_intersection"",""datum_plane"",""datum_axis"",""datum_point""] },
         ""parameters"": { ""type"": ""object"" },
         ""sketch_entities"": { ""type"": ""array"", ""items"": { ""type"": ""object"" } },
+        ""constraints"": { ""type"": ""array"", ""items"": { ""type"": ""object"" }, ""description"": ""草圖約束（WP1-2）。每個約束含 id, type, targets, value_mm/value_deg, name"" },
         ""standard_parts"": { ""type"": ""object"" },
         ""plane"": { ""type"": ""object"", ""properties"": { ""base"": { ""type"": ""string"", ""enum"": [""XY"",""XZ"",""YZ""] }, ""offset"": { ""type"": ""number"" } }, ""required"": [""base""] }
       }, ""required"": [""description"",""feature_type"",""parameters""] } },
@@ -101,10 +115,20 @@ public abstract class LlmProviderBase : ILlmProvider
 
     public async Task<CadCommand> CreateUpdateCommandAsync(string userRequest, string featureGraphJson, List<ChatTurn>? history = null)
     {
+        // WP-H1: Capability payload
+        var capability = await GetCapabilityPayloadAsync();
         var userPrompt = $@"
-使用者的修改需求：{userRequest}
+=== CAPABILITY PAYLOAD (WP-H1) ===
+schema_version: {capability.SchemaVersion}
+engine_version: {capability.EngineVersion}
+支援 feature catalog: {capability.FeatureCatalogJson}
+不支援功能（拒絕規則）: {string.Join(", ", capability.UnsupportedFeatures)}
+可用工具: {string.Join(", ", capability.Tools)}
 
-目前 Feature Graph（JSON）：
+=== 使用者修改需求 ===
+{userRequest}
+
+=== 目前 Feature Graph（JSON） ===
 {featureGraphJson}
 
 請根據使用者需求，決定命令類型並產生對應命令：
@@ -233,6 +257,85 @@ public abstract class LlmProviderBase : ILlmProvider
         return JsonSerializer.Deserialize<CadCommand>(result, JsonOpts) ?? new CadCommand { Action = "rebuild" };
     }
 
+    /// <summary>
+    /// WP-H1: 取得 Capability payload。子類可覆寫以從引擎動態取得。
+    /// 預設從硬編碼 catalog 生成（與 server /api/capability 一致）。
+    /// </summary>
+    public virtual Task<CapabilityPayload> GetCapabilityPayloadAsync()
+    {
+        var payload = new CapabilityPayload
+        {
+            SchemaVersion = "1.0",
+            EngineVersion = "opencad-worker-1.0",
+            UnsupportedFeatures = new List<string> { "thread", "knit", "trim_surface", "thicken", "delete_face", "helical_gear" },
+            Tools = new List<string> { "inspect_document", "query_feature_catalog", "propose_transaction", "validate_transaction", "rebuild_staging", "request_user_confirmation" },
+        };
+        // Build feature catalog from known types
+        var catalog = new List<object>
+        {
+            new { type = "sketch", parameters = new[] { "sketch_entities", "plane", "constraints" } },
+            new { type = "pad", parameters = new[] { "length", "taper_deg" } },
+            new { type = "pocket", parameters = new[] { "depth", "through_all" } },
+            new { type = "hole", parameters = new[] { "diameter", "depth", "through_all", "positions", "hole_type" } },
+            new { type = "fillet", parameters = new[] { "radius", "edges", "exclude_holes" } },
+            new { type = "chamfer", parameters = new[] { "length", "edges", "exclude_holes" } },
+            new { type = "shell", parameters = new[] { "thickness" } },
+            new { type = "mirror", parameters = Array.Empty<string>() },
+            new { type = "revolve", parameters = new[] { "angle" } },
+            new { type = "sweep", parameters = Array.Empty<string>() },
+            new { type = "loft", parameters = Array.Empty<string>() },
+            new { type = "linear_pattern", parameters = new[] { "count", "spacing_mm", "direction" } },
+            new { type = "circular_pattern", parameters = new[] { "count", "angle_deg" } },
+            new { type = "datum_plane", parameters = new[] { "method", "source_ref", "offset_mm", "angle_deg" } },
+            new { type = "datum_axis", parameters = new[] { "method", "source_ref", "source_ref_2" } },
+            new { type = "datum_point", parameters = new[] { "method", "source_ref" } },
+            new { type = "draft", parameters = new[] { "angle_deg", "face_selector", "direction" } },
+            new { type = "rib", parameters = new[] { "thickness", "direction", "sketch_id" } },
+            new { type = "thin", parameters = new[] { "length", "thickness" } },
+            new { type = "variable_fillet", parameters = new[] { "radii", "edge_selector", "radius" } },
+            new { type = "countersink", parameters = new[] { "diameter", "countersink_diameter", "countersink_angle_deg", "positions" } },
+            new { type = "cosmetic_thread", parameters = new[] { "diameter", "pitch", "depth", "positions" } },
+        };
+        payload.FeatureCatalogJson = JsonSerializer.Serialize(catalog, JsonOpts);
+        return Task.FromResult(payload);
+    }
+
+    /// <summary>
+    /// WP-H1: 程式硬檢查——拒絕不支援的功能，防止 LLM 偷換近似幾何。
+    /// 回傳 true 表示通過檢查；false 表示命令被拒絕，reasoning 含拒絕原因。
+    /// </summary>
+    public static bool ValidateAgainstCatalog(CadCommand command, CapabilityPayload capability, out string rejectReason)
+    {
+        rejectReason = "";
+        var unsupportedSet = new HashSet<string>(capability.UnsupportedFeatures, StringComparer.OrdinalIgnoreCase);
+
+        // Check create_feature with unsupported type
+        if (command.Action == "create_feature" && command.Feature != null)
+        {
+            var featType = command.Feature.Type.ToString().ToLowerInvariant();
+            if (unsupportedSet.Contains(featType))
+            {
+                rejectReason = $"不支援的功能：{featType}。引擎不支援此特徵類型，不得以近似幾何替代。";
+                return false;
+            }
+        }
+
+        // Check reasoning mentions unsupported but action is not rebuild (偷換)
+        if (command.Reasoning != null && command.Action != "rebuild")
+        {
+            foreach (var unsupported in unsupportedSet)
+            {
+                if (command.Reasoning.Contains(unsupported, StringComparison.OrdinalIgnoreCase))
+                {
+                    rejectReason = $"需求涉及不支援的功能：{unsupported}。應設 action=rebuild 並在 reasoning 中說明。不得以近似幾何替代。";
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
     private const string LlmCommandSchema = @"
 {
   ""type"": ""object"",
@@ -281,5 +384,22 @@ public abstract class LlmProviderBase : ILlmProvider
         "18. fillet/chamfer 的 exclude_holes 參數：當使用者說「通孔不要動」「孔不要影響」「不要動到中間的孔」時，\n" +
         "    必須在 fillet/chamfer 的 parameters 中加入 exclude_holes: true。這會讓圓角/倒角只作用於外邊緣，跳過孔的邊緣。\n" +
         "    若使用者沒有特別說要保護孔，則不需要加 exclude_holes（預設 false）。\n" +
-        "重要：你的輸出必須是合法 JSON，符合指定的 Schema。";
+        "19. 草圖約束（WP1-2）：sketch 步驟可包含 constraints 陣列，用來定義 fully-constrained 草圖。\n" +
+        "    約束格式：{\"id\":\"c1\",\"type\":\"horizontal|vertical|coincident|distance|radius|diameter|equal|parallel|perpendicular|concentric|midpoint|symmetric|angle|tangent\",\"targets\":[\"e1.start\",\"e2.end\"],\"value_mm\":60,\"name\":\"d1\"}\n" +
+        "    targets 使用「實體ID.點位」格式，如 e1.start（線段起點）、e1.end（線段終點）、e1.center（圓心）。\n" +
+        "    範例：矩形 60×40 fully-constrained = rectangle(width:60,height:40) + horizontal(底邊) + vertical(左邊) + distance(60) + distance(40)。\n" +
+        "    輸出 fully-constrained 草圖——所有尺寸由約束驅動，不要在 sketch_entities 參數中硬編碼多餘尺寸。\n" +
+        "重要：你的輸出必須是合法 JSON，符合指定的 Schema。\n" +
+        "20. WP-H1 拒絕規則（系統提示＋程式硬檢查雙層）：\n" +
+        "    a. 缺尺寸→必須提問，不得自行猜測數值（如「做一個盒子」無尺寸→提問，不可用任意值）。\n" +
+        "    b. selector 歧義→要求使用者點選（如「挖一個孔」未指定位置→提問，回傳 missing_info）。\n" +
+        "    c. 不支援的功能→明確說明不支援，**不得偷換近似幾何**（如「螺旋齒輪」→拒絕，不可改為圓柱）。\n" +
+        "       目前不支援清單：rib(加強肋)、draft(拔模角)、thread(螺紋)、knit/sew、trim_surface、thicken、delete_face、helical_gear。\n" +
+        "    d. 不得靜默改尺寸/刪特徵——所有變更必須在 reasoning 中說明。\n" +
+        "    e. 破壞性命令（delete_feature）必須在 reasoning 中明確說明刪除目標與影響範圍。\n" +
+        "21. WP-H1 Capability payload：每次呼叫必帶 schema_version=1.0、engine_version、feature_catalog。\n" +
+        "    模型不得憑 prompt 記憶猜功能——只能使用 feature_catalog 中列出的型別與參數。\n" +
+        "22. WP-H1 修復迴圈限制：低風險修復最多 2 次（非 3 次），只修白名單類型：\n" +
+        "    SKETCH_NOT_CLOSED、INVALID_STANDARD_PART、REFERENCE_NOT_FOUND、FILLET_RADIUS_TOO_LARGE、CHAMFER_DISTANCE_TOO_LARGE。\n" +
+        "    其餘錯誤類型一律出卡片讓使用者手動處理。";
 }

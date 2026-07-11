@@ -14,6 +14,9 @@ public class CadCommand
     [JsonPropertyName("action")]
     public string Action { get; set; } = string.Empty;
 
+    // v2: supported actions include suppress_feature, unsuppress_feature,
+    // reorder_feature, set_rollback in addition to v1 actions.
+
     [JsonPropertyName("document_id")]
     public string? DocumentId { get; set; }
 
@@ -40,6 +43,9 @@ public class CadCommand
 
     [JsonPropertyName("plane")]
     public Dictionary<string, object>? Plane { get; set; }
+
+    [JsonPropertyName("constraints")]
+    public List<Dictionary<string, object>>? Constraints { get; set; }
 
     [JsonPropertyName("reasoning")]
     public string Reasoning { get; set; } = string.Empty;
@@ -76,6 +82,9 @@ public class DesignStep
 
     [JsonPropertyName("sketch_entities")]
     public List<Dictionary<string, object>>? SketchEntities { get; set; }
+
+    [JsonPropertyName("constraints")]
+    public List<Dictionary<string, object>>? Constraints { get; set; }
 
     [JsonPropertyName("standard_parts")]
     public Dictionary<string, object>? StandardParts { get; set; }

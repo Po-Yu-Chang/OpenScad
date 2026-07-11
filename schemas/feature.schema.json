@@ -1,4 +1,4 @@
-{
+﻿{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://opencad.dev/schemas/feature.schema.json",
   "title": "OpenCad Feature Graph File",
@@ -53,7 +53,7 @@
     "constraint": {
       "type": "object",
       "properties": {
-        "constraint_id": { "type": "string" },
+        "id": { "type": "string", "description": "唯一識別碼" },
         "type": {
           "type": "string",
           "enum": [
@@ -64,10 +64,12 @@
             "concentric",
             "tangent",
             "coincident",
+            "equal",
             "equal_length",
             "distance",
             "radius",
             "diameter",
+            "midpoint",
             "angle",
             "symmetric"
           ]
@@ -77,16 +79,19 @@
           "items": { "type": "string" },
           "description": "受約束的草圖實體 ID"
         },
+        "value_mm": { "type": "number", "description": "距離/半徑/直徑值（mm）" },
+        "value_deg": { "type": "number", "description": "角度值（度）" },
+        "name": { "type": "string", "description": "方程式參照名稱，如 d1, R5" },
         "value": { "$ref": "#/definitions/parameter_value" },
         "metadata": {
           "type": "object",
-          "description": "宣告式中繼資料（第一版 build123d 不求解，僅供驗證與日後遷移）",
+          "description": "宣告式中繼資料",
           "properties": {
             "verified": { "type": "boolean" }
           }
         }
       },
-      "required": ["constraint_id", "type", "targets"]
+      "required": ["id", "type", "targets"]
     },
     "feature": {
       "type": "object",
@@ -115,7 +120,13 @@
             "shell",
             "boolean_union",
             "boolean_difference",
-            "boolean_intersection"
+            "boolean_intersection",
+            "draft",
+            "rib",
+            "thin",
+            "variable_fillet",
+            "countersink",
+            "cosmetic_thread"
           ]
         },
         "name": {
@@ -209,6 +220,42 @@
           "description": "錯誤訊息（重建失敗時）"
         }
       }
+    },
+    "reference_geometry": {
+      "type": "object",
+      "description": "WP1-3 基準幾何——datum plane/axis/point",
+      "properties": {
+        "id": { "type": "string", "description": "唯一識別碼" },
+        "name": { "type": "string", "description": "顯示名稱" },
+        "kind": { "type": "string", "enum": ["plane", "axis", "point"], "description": "基準類型" },
+        "definition": {
+          "type": "object",
+          "description": "定義方式",
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": ["offset", "angle_between", "mid_plane", "intersection", "cylinder_axis", "vertex", "center"],
+              "description": "建立方法"
+            },
+            "source_ref": { "type": "string", "description": "來源面/邊的語意參照" },
+            "source_ref_2": { "type": "string", "description": "第二來源" },
+            "offset_mm": { "type": "number", "description": "偏移量（mm）" },
+            "angle_deg": { "type": "number", "description": "夾角（度）" }
+          },
+          "required": ["method"]
+        },
+        "derived_geometry": {
+          "type": "object",
+          "description": "重建後計算出的幾何座標（worker 填入）",
+          "properties": {
+            "origin": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 },
+            "normal": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 },
+            "direction": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3, "description": "軸方向（axis）" },
+            "point": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3, "description": "點座標（point）" }
+          }
+        }
+      },
+      "required": ["id", "kind", "definition"]
     }
   }
 }

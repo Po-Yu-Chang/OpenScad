@@ -8,7 +8,7 @@
   "properties": {
     "schema_version": {
       "type": "string",
-      "const": "1.0",
+      "enum": ["1.0", "2.0"],
       "description": "命令結構描述版本"
     },
     "action": {
@@ -18,6 +18,13 @@
         "create_feature",
         "update_feature",
         "delete_feature",
+        "suppress_feature",
+        "unsuppress_feature",
+        "reorder_feature",
+        "set_rollback",
+        "create_reference_geometry",
+        "update_reference_geometry",
+        "delete_reference_geometry",
         "rebuild",
         "export",
         "validate"
@@ -102,6 +109,24 @@
         }
       }
     },
+    "sketch_entities": {
+      "type": "array",
+      "items": { "type": "object" },
+      "description": "草圖實體更新（update_feature 使用）"
+    },
+    "plane": {
+      "type": "object",
+      "description": "基準面更新（update_feature 使用）"
+    },
+    "constraints": {
+      "type": "array",
+      "items": { "$ref": "feature.schema.json#/definitions/constraint" },
+      "description": "草圖約束更新（update_feature 使用，WP1-2）"
+    },
+    "reference_geometry": {
+      "$ref": "feature.schema.json#/definitions/reference_geometry",
+      "description": "基準幾何定義（create_reference_geometry / update_reference_geometry 使用，WP1-3）"
+    },
     "reasoning": {
       "type": "string",
       "description": "LLM 的設計理由（供使用者審查）"
@@ -114,11 +139,36 @@
     },
     {
       "if": { "properties": { "action": { "const": "update_feature" } } },
-      "then": { "required": ["document_id", "target_feature_id", "parameters"] }
+      "then": {
+        "required": ["document_id", "target_feature_id"],
+        "anyOf": [
+          { "required": ["parameters"] },
+          { "required": ["standard_parts"] },
+          { "required": ["sketch_entities"] },
+          { "required": ["plane"] },
+          { "required": ["constraints"] }
+        ]
+      }
     },
     {
       "if": { "properties": { "action": { "const": "delete_feature" } } },
       "then": { "required": ["document_id", "target_feature_id"] }
+    },
+    {
+      "if": { "properties": { "action": { "const": "suppress_feature" } } },
+      "then": { "required": ["document_id", "target_feature_id"] }
+    },
+    {
+      "if": { "properties": { "action": { "const": "unsuppress_feature" } } },
+      "then": { "required": ["document_id", "target_feature_id"] }
+    },
+    {
+      "if": { "properties": { "action": { "const": "reorder_feature" } } },
+      "then": { "required": ["document_id", "target_feature_id", "parameters"] }
+    },
+    {
+      "if": { "properties": { "action": { "const": "set_rollback" } } },
+      "then": { "required": ["document_id", "parameters"] }
     },
     {
       "if": { "properties": { "action": { "const": "export" } } },
@@ -131,6 +181,18 @@
     {
       "if": { "properties": { "action": { "const": "validate" } } },
       "then": { "required": ["document_id"] }
+    },
+    {
+      "if": { "properties": { "action": { "const": "create_reference_geometry" } } },
+      "then": { "required": ["document_id", "reference_geometry"] }
+    },
+    {
+      "if": { "properties": { "action": { "const": "update_reference_geometry" } } },
+      "then": { "required": ["document_id", "target_feature_id", "reference_geometry"] }
+    },
+    {
+      "if": { "properties": { "action": { "const": "delete_reference_geometry" } } },
+      "then": { "required": ["document_id", "target_feature_id"] }
     }
   ]
 }

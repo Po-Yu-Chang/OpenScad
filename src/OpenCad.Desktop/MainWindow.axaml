@@ -49,6 +49,32 @@
                 <!-- 新增草圖 -->
                 <Button Grid.Column="3" Classes="tool" Content="✏ 草圖" Command="{Binding NewSketchCommand}" Margin="4,0,0,0" ToolTip.Tip="建立新草圖並進入編輯" />
 
+                <!-- WP1-3: 基準面偏移 -->
+                <Button Grid.Column="3" Classes="tool" Content="📐 基準面" Command="{Binding CreateDatumPlaneCommand}" Margin="4,0,0,0" ToolTip.Tip="建立偏移基準面" />
+
+                <!-- WP1-4: 量測工具 -->
+                <Button Grid.Column="3" Classes="tool" Content="📏 量測" Command="{Binding ToggleMeasureCommand}" Margin="4,0,0,0" ToolTip.Tip="量測模式：點兩個面/邊/點顯示距離/角度/半徑" />
+
+                <!-- WP1-4: 選取過濾器 -->
+                <Menu Grid.Column="3" Background="Transparent" Margin="4,0,0,0">
+                    <MenuItem Header="🩹 選取" Foreground="{DynamicResource TextBrush}" ToolTip.Tip="選取過濾器">
+                        <MenuItem Header="全部" Command="{Binding SetSelectionFilterCommand}" CommandParameter="{x:Static vm:SelectionFilter.All}" />
+                        <MenuItem Header="面" Command="{Binding SetSelectionFilterCommand}" CommandParameter="{x:Static vm:SelectionFilter.Face}" />
+                        <MenuItem Header="邊" Command="{Binding SetSelectionFilterCommand}" CommandParameter="{x:Static vm:SelectionFilter.Edge}" />
+                        <MenuItem Header="頂點" Command="{Binding SetSelectionFilterCommand}" CommandParameter="{x:Static vm:SelectionFilter.Vertex}" />
+                    </MenuItem>
+                </Menu>
+
+                <!-- WP1-4: 顯示模式 -->
+                <Menu Grid.Column="3" Background="Transparent" Margin="4,0,0,0">
+                    <MenuItem Header="👁 顯示" Foreground="{DynamicResource TextBrush}" ToolTip.Tip="顯示模式">
+                        <MenuItem Header="實體著色" Command="{Binding SetDisplayModeCommand}" CommandParameter="{x:Static vm:DisplayMode.Shaded}" />
+                        <MenuItem Header="著色+邊線" Command="{Binding SetDisplayModeCommand}" CommandParameter="{x:Static vm:DisplayMode.ShadedWithEdges}" />
+                        <MenuItem Header="線框" Command="{Binding SetDisplayModeCommand}" CommandParameter="{x:Static vm:DisplayMode.Wireframe}" />
+                        <MenuItem Header="透明" Command="{Binding SetDisplayModeCommand}" CommandParameter="{x:Static vm:DisplayMode.Transparent}" />
+                    </MenuItem>
+                </Menu>
+
                 <!-- 重建 -->
                 <Button Grid.Column="4" Classes="primary" Content="重建" Command="{Binding RebuildCommand}" Margin="8,0,0,0" />
 
@@ -86,13 +112,24 @@
                                     <MenuItem Header="✏ 編輯草圖" Command="{Binding EditSketchCommand}" IsVisible="{Binding CanEditSketch}" />
                                     <MenuItem Header="📝 編輯參數" Command="{Binding EditParametersCommand}" />
                                     <MenuItem Header="🗑 刪除" Command="{Binding DeleteFeatureCommand}" />
-                                </ContextMenu>
-                            </TreeView.ContextMenu>
+                                    <Separator />
+                                    <MenuItem Header="⊘ 抑制" Command="{Binding SuppressFeatureCommand}" />
+                                    <MenuItem Header="⊙ 取消抑制" Command="{Binding UnsuppressFeatureCommand}" />
+                                    <Separator />
+                                            <MenuItem Header="🔍 隔離" Command="{Binding IsolateFeatureCommand}" />
+                                            <MenuItem Header="🙈 隱藏" Command="{Binding HideFeatureCommand}" />
+                                            <MenuItem Header="👁 顯示全部" Command="{Binding ShowAllFeaturesCommand}" />
+                                            <Separator />
+                                            <MenuItem Header="⏮ 回溯到此" Command="{Binding RollbackToHereCommand}" />
+                                            <MenuItem Header="⏭ 回到末端" Command="{Binding RollbackToEndCommand}" />
+                                        </ContextMenu>
+                                    </TreeView.ContextMenu>
                             <TreeView.ItemTemplate>
                                 <TreeDataTemplate ItemsSource="{Binding Children}">
                                     <StackPanel Orientation="Horizontal" Spacing="4">
                                         <TextBlock Text="{Binding TypeIcon}" Foreground="{DynamicResource AccentBrush}" FontSize="14" />
                                         <TextBlock Text="{Binding DisplayName}" Foreground="{DynamicResource TextBrush}" />
+                                        <TextBlock Text="{Binding StateIcon}" Foreground="{Binding StateColor}" FontSize="14" />
                                     </StackPanel>
                                 </TreeDataTemplate>
                             </TreeView.ItemTemplate>
@@ -103,20 +140,43 @@
                 <GridSplitter Grid.Row="1" Background="{DynamicResource BorderBrush}" ResizeDirection="Rows" />
 
                 <Border Grid.Row="2" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,1,0">
-                    <Grid RowDefinitions="Auto,Auto,*">
+                    <Grid RowDefinitions="Auto,Auto,Auto,*">
                         <TextBlock Grid.Row="0" Text="參數面板" FontWeight="Bold" Foreground="{DynamicResource TextBrush}" Margin="12,8,0,4" />
                         <Button Grid.Row="1" Classes="tool" Content="✏ 編輯草圖" Command="{Binding EditSketchCommand}"
                                 Margin="12,0,12,4" IsVisible="{Binding CanEditSketch}"
                                 HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
-                        <ScrollViewer Grid.Row="2" Padding="8">
+                        <Button Grid.Row="2" Classes="primary" Content="✓ 全部套用" Command="{Binding ApplyAllParametersCommand}"
+                                Margin="12,0,12,4" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                                ToolTip.Tip="套用所有已修改的參數並重建" />
+                        <ScrollViewer Grid.Row="3" Padding="8">
                             <ItemsControl ItemsSource="{Binding SelectedFeatureParameters}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
                                         <Grid ColumnDefinitions="100,*,Auto" Margin="0,2">
                                             <TextBlock Grid.Column="0" Text="{Binding Key}" Foreground="{DynamicResource SubtextBrush}" FontFamily="Consolas" FontSize="11" VerticalAlignment="Center" />
+                                            <!-- Number type: TextBox -->
                                             <TextBox Grid.Column="1" Text="{Binding Value}" Foreground="{DynamicResource TextBrush}" FontFamily="Consolas" FontSize="11"
                                                      IsReadOnly="{Binding !IsEditable}" Background="Transparent" BorderThickness="0,0,0,1"
-                                                     Padding="2" Margin="0,0,0,2" />
+                                                     Padding="2" Margin="0,0,0,2"
+                                                     IsVisible="{Binding ParamType, Converter={x:Static vm:EnumEqualsConverter.IsNumber}}" />
+                                            <!-- Dropdown type: ComboBox -->
+                                            <ComboBox Grid.Column="1" ItemsSource="{Binding DropdownOptions}" SelectedItem="{Binding Value}"
+                                                      FontFamily="Consolas" FontSize="11" Margin="0,0,0,2"
+                                                      IsVisible="{Binding ParamType, Converter={x:Static vm:EnumEqualsConverter.IsDropdown}}" />
+                                            <!-- Checkbox type: CheckBox -->
+                                            <CheckBox Grid.Column="1" IsChecked="{Binding Value, Converter={x:Static vm:StringToBoolConverter.Instance}}"
+                                                      Content="{Binding Value}" FontFamily="Consolas" FontSize="11" Margin="0,0,0,2"
+                                                      IsVisible="{Binding ParamType, Converter={x:Static vm:EnumEqualsConverter.IsCheckbox}}" />
+                                            <!-- Reference type: Button to pick in viewer -->
+                                            <Button Grid.Column="1" Content="{Binding ReferenceHint}" FontFamily="Consolas" FontSize="11"
+                                                    Padding="2" Margin="0,0,0,2" HorizontalAlignment="Stretch"
+                                                    Background="Transparent" BorderThickness="0,0,0,1"
+                                                    IsVisible="{Binding ParamType, Converter={x:Static vm:EnumEqualsConverter.IsReference}}" />
+                                            <!-- ReadOnly type: TextBlock -->
+                                            <TextBlock Grid.Column="1" Text="{Binding Value}" Foreground="{DynamicResource SubtextBrush}"
+                                                       FontFamily="Consolas" FontSize="11" VerticalAlignment="Center"
+                                                       Margin="0,0,0,2" Padding="2"
+                                                       IsVisible="{Binding ParamType, Converter={x:Static vm:EnumEqualsConverter.IsReadOnly}}" />
                                             <Button Grid.Column="2" Content="✓" FontSize="11" Padding="6,2" Margin="4,0,0,0"
                                                     Command="{Binding ApplyCommand}" IsVisible="{Binding IsDirty}"
                                                     Background="{DynamicResource AccentBrush}" Foreground="{DynamicResource CrustBrush}"

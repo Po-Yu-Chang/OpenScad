@@ -41,6 +41,74 @@ public class MainViewModel : INotifyPropertyChanged
     public ObservableCollection<FeatureNode> FeatureTree { get; } = new();
     public ObservableCollection<ParameterItem> SelectedFeatureParameters { get; } = new();
 
+    // WP1-4: 量測結果
+    public ObservableCollection<MeasurementResult> Measurements { get; } = new();
+
+    // WP1-4: 選取過濾器
+    private SelectionFilter _selectionFilter = SelectionFilter.All;
+    public SelectionFilter SelectionFilter
+    {
+        get => _selectionFilter;
+        set
+        {
+            _selectionFilter = value;
+            OnPropertyChanged();
+            // 通知 viewer 變更 raycast 層
+            var filterStr = value.ToString().ToLowerInvariant();
+            ViewerScriptRequested?.Invoke($"setSelectionFilter('{filterStr}');");
+        }
+    }
+
+    // WP1-4: 顯示模式
+    private DisplayMode _displayMode = DisplayMode.Shaded;
+    public DisplayMode DisplayModeProp
+    {
+        get => _displayMode;
+        set
+        {
+            _displayMode = value;
+            OnPropertyChanged();
+            var modeStr = value switch
+            {
+                DisplayMode.Shaded => "shaded",
+                DisplayMode.ShadedWithEdges => "shaded-with-edges",
+                DisplayMode.Wireframe => "wireframe",
+                DisplayMode.Transparent => "transparent",
+                _ => "shaded",
+            };
+            ViewerScriptRequested?.Invoke($"setDisplayMode('{modeStr}');");
+        }
+    }
+
+    // WP1-4: 量測模式
+    private bool _isMeasuring;
+    public bool IsMeasuring
+    {
+        get => _isMeasuring;
+        set
+        {
+            _isMeasuring = value;
+            OnPropertyChanged();
+            ViewerScriptRequested?.Invoke(value ? "enterMeasureMode();" : "exitMeasureMode();");
+        }
+    }
+
+    // WP1-4: 隔離的特徵 ID（null = 不隔離）
+    private string? _isolatedFeatureId;
+    public string? IsolatedFeatureId
+    {
+        get => _isolatedFeatureId;
+        set
+        {
+            _isolatedFeatureId = value;
+            OnPropertyChanged();
+            if (value != null)
+                ViewerScriptRequested?.Invoke($"isolateFeature('{value}');");
+            else
+                ViewerScriptRequested?.Invoke("clearIsolate();");
+        }
+    }
+
     public string InputText
     {
         get => _inputText;
@@ -154,7 +222,21 @@ public class MainViewModel : INotifyPropertyChanged
     public ICommand EditSketchCommand { get; }
     public ICommand DeleteFeatureCommand { get; }
     public ICommand EditParametersCommand { get; }
+    public ICommand SuppressFeatureCommand { get; }
+    public ICommand UnsuppressFeatureCommand { get; }
+    public ICommand RollbackToHereCommand { get; }
+    public ICommand RollbackToEndCommand { get; }
     public ICommand ExportChatCommand { get; }
+    public ICommand CreateDatumPlaneCommand { get; }
+
+    // WP1-4: Property Manager / 量測 / 選取 / 顯示模式 命令
+    public ICommand ToggleMeasureCommand { get; }
+    public ICommand ApplyAllParametersCommand { get; }
+    public ICommand IsolateFeatureCommand { get; }
+    public ICommand HideFeatureCommand { get; }
+    public ICommand ShowAllFeaturesCommand { get; }
+    public ICommand SetSelectionFilterCommand { get; }
+    public ICommand SetDisplayModeCommand { get; }
 
     /// <summary>
     /// 當 ViewModel 需要在 3D 視窗中執行 JavaScript 時觸發。
@@ -187,7 +269,21 @@ public class MainViewModel : INotifyPropertyChanged
         EditSketchCommand = new AsyncRelayCommand(EditSketchAsync, () => CanEditSketch && IsWorkerConnected);
         DeleteFeatureCommand = new AsyncRelayCommand(DeleteFeatureAsync, () => _selectedFeature != null && !_selectedFeature.IsDatumPlane && IsWorkerConnected);
         EditParametersCommand = new RelayCommand(EditParameters, () => _selectedFeature != null && !_selectedFeature.IsDatumPlane);
+        SuppressFeatureCommand = new AsyncRelayCommand(SuppressFeatureAsync, () => _selectedFeature != null && !_selectedFeature.IsDatumPlane && IsWorkerConnected);
+        UnsuppressFeatureCommand = new AsyncRelayCommand(UnsuppressFeatureAsync, () => _selectedFeature != null && !_selectedFeature.IsDatumPlane && IsWorkerConnected);
+        RollbackToHereCommand = new AsyncRelayCommand(RollbackToHereAsync, () => _selectedFeature != null && !_selectedFeature.IsDatumPlane && IsWorkerConnected);
+        RollbackToEndCommand = new AsyncRelayCommand(RollbackToEndAsync, () => IsWorkerConnected);
         ExportChatCommand = new AsyncRelayCommand(ExportChatAsync, () => Messages.Count > 0);
+        CreateDatumPlaneCommand = new AsyncRelayCommand(CreateDatumPlaneDialogAsync, () => IsWorkerConnected);
+
+        // WP1-4: 量測/選取/顯示模式命令
+        ToggleMeasureCommand = new RelayCommand(() => IsMeasuring = !IsMeasuring);
+        ApplyAllParametersCommand = new AsyncRelayCommand(ApplyAllParametersAsync, () => SelectedFeatureParameters.Any(p => p.IsDirty) && IsWorkerConnected);
+        IsolateFeatureCommand = new AsyncRelayCommand(IsolateFeatureAsync, () => _selectedFeature != null && IsWorkerConnected);
+        HideFeatureCommand = new AsyncRelayCommand(HideFeatureAsync, () => _selectedFeature != null && IsWorkerConnected);
+        ShowAllFeaturesCommand = new AsyncRelayCommand(ShowAllFeaturesAsync, () => IsWorkerConnected);
+        SetSelectionFilterCommand = new RelayCommand<SelectionFilter>(f => SelectionFilter = f);
+        SetDisplayModeCommand = new RelayCommand<DisplayMode>(m => DisplayModeProp = m);
 
         // 歡迎訊息
         Messages.Add(ChatMessage.Assistant(
@@ -525,16 +621,17 @@ public class MainViewModel : INotifyPropertyChanged
                 ValidationText = $"驗證失敗：{ex.Message}";
             }
 
-            // 匯出 GLB 預覽——preview.glb 端點只回傳已生成的檔案，
-            // 必須先實際匯出，否則 404
+            // GLB 已在 rebuild 時由逐面 tessellation 產生（與 display_map 同路徑）。
+            // ExportAsync("glb") 確保檔案就緒（若 rebuild 已產生則直接回傳既有檔案）。
             await _worker.ExportAsync(_projectId, "glb");
 
             _rebuildCount++;
             if (_workerClient != null)
                 _workerClient.RebuildCount = _rebuildCount;
 
-            var previewUrl = _worker.GetPreviewUrl(_projectId);
-            ViewerScriptRequested?.Invoke(ViewerBridge.BuildLoadScript(previewUrl));
+            var previewUrl = await _worker.GetPreviewUrlAsync(_projectId);
+            var displayMapUrl = await _worker.GetDisplayMapUrlAsync(_projectId);
+            ViewerScriptRequested?.Invoke(ViewerBridge.BuildLoadScript(previewUrl, displayMapUrl));
 
             // 更新特徵樹
             await UpdateFeatureTreeAsync();
@@ -567,17 +664,36 @@ public class MainViewModel : INotifyPropertyChanged
     }
 
     /// <summary>
-    /// Repair Agent 迴圈——當重建失敗時，將錯誤碼餵給 LLM 產生修正命令，最多重試 3 次。
+    /// Repair Agent 迴圈——當重建失敗時，將錯誤碼餵給 LLM 產生修正命令。
+    /// WP-H1：低風險 2 次重試（地雷 #16），修復類型白名單：格式修正、唯一可推導 reference。
     /// </summary>
     private async Task<RebuildResult> TryRepairAsync(RebuildResult failedRebuild)
     {
-        const int maxRetries = 3;
+        const int maxRetries = 2;
+        // WP-H1 修復白名單（地雷 #16）——只允許「格式修正」與「唯一可推導」類低風險修復。
+        // 改尺寸類（FILLET_RADIUS_TOO_LARGE 等）與改參照類（FEATURE_REFERENCE_NOT_FOUND）
+        // 不得自動套用——只能提出建議由使用者確認。
+        var repairWhitelist = new HashSet<string>
+        {
+            "SKETCH_NOT_CLOSED",
+            "INVALID_STANDARD_PART",
+        };
         var rebuild = failedRebuild;
+        string? lastErrorCode = null;
+        string? lastRepairJson = null;
 
         for (int attempt = 1; attempt <= maxRetries; attempt++)
         {
             if (string.IsNullOrEmpty(rebuild.ErrorCode))
                 break;
+
+            // WP-H1：非白名單錯誤不自動修復，直接出卡片讓使用者決定
+            if (!repairWhitelist.Contains(rebuild.ErrorCode))
+            {
+                Messages.Add(ChatMessage.Assistant(
+                    $"⚠️ 錯誤類型 {rebuild.ErrorCode} 不在自動修復白名單中，需手動處理：{rebuild.EngineMessage}"));
+                break;
+            }
 
             Log.Information("Repair Agent 第 {Attempt} 次嘗試：{Code} {Msg}",
                 attempt, rebuild.ErrorCode, rebuild.EngineMessage);
@@ -593,15 +709,40 @@ public class MainViewModel : INotifyPropertyChanged
                 var repairCmd = await _llmProvider!.RepairCommandAsync(
                     rebuild.ErrorCode!, rebuild.EngineMessage ?? "", graphJson);
 
+                // 地雷 #16：同一錯誤＋同一命令不得反覆重試
+                var repairJson = System.Text.Json.JsonSerializer.Serialize(repairCmd);
+                if (rebuild.ErrorCode == lastErrorCode && repairJson == lastRepairJson)
+                {
+                    Messages.Add(ChatMessage.Assistant("⚠️ LLM 產生了與上次相同的修正命令，停止重試"));
+                    break;
+                }
+                lastErrorCode = rebuild.ErrorCode;
+                lastRepairJson = repairJson;
+
                 Messages.Add(ChatMessage.Assistant(
                     $"修正方案：{repairCmd.Action}" +
                     (repairCmd.TargetFeatureId != null ? $" → {repairCmd.TargetFeatureId}" : "")));
 
-                // 套用修正命令
+                // 套用修正命令，再以 staging dry-run 驗證「修正後」的 graph——
+                // 驗證失敗就 undo 還原，不污染正式模型（dry-run 在套用前跑只會驗到舊圖）
                 var cmdResult = await _worker.ApplyCommandAsync(_projectId!, repairCmd);
                 if (cmdResult.Status == "error")
                 {
                     Log.Warning("修正命令失敗：{Msg}", cmdResult.EngineMessage);
+                    continue;
+                }
+
+                var dryRunResult = await _worker.RebuildStagingAsync(_projectId!);
+                if (dryRunResult.Status != "success")
+                {
+                    Log.Warning("Dry-run 驗證修正後仍失敗，undo 還原：{Msg}", dryRunResult.EngineMessage);
+                    await _worker.UndoAsync(_projectId!);
+                    rebuild = new RebuildResult
+                    {
+                        Status = dryRunResult.Status,
+                        ErrorCode = dryRunResult.ErrorCode ?? rebuild.ErrorCode,
+                        EngineMessage = dryRunResult.EngineMessage,
+                    };
                     continue;
                 }
 
@@ -1104,6 +1245,7 @@ public class MainViewModel : INotifyPropertyChanged
                                 Name = $"草圖（自步驟 {index} 拆出）",
                                 Parameters = new(),
                                 SketchEntities = step.SketchEntities,
+                                Constraints = step.Constraints ?? new(),
                                 Plane = plane,
                             },
                         });
@@ -1142,6 +1284,7 @@ public class MainViewModel : INotifyPropertyChanged
                         References = references,
                         Parameters = step.Parameters,
                         SketchEntities = featType == FeatureType.Sketch ? step.SketchEntities ?? new() : new(),
+                        Constraints = featType == FeatureType.Sketch ? step.Constraints ?? new() : new(),
                         StandardParts = step.StandardParts ?? new(),
                         Plane = plane,
                     },
@@ -1514,6 +1657,11 @@ public class MainViewModel : INotifyPropertyChanged
             string planeBase = "XY";
             if (_selectedFeature != null && _selectedFeature.IsDatumPlane && _selectedFeature.PlaneBase != null)
                 planeBase = _selectedFeature.PlaneBase;
+            // WP1-3: 若選取的是基準幾何中的 datum plane，使用 datum: 引用
+            else if (_selectedFeature?.ReferenceGeometryId is string datumId)
+            {
+                planeBase = $"datum:{datumId}";
+            }
 
             // 產生 sketch_N ID：取現存草圖編號最大值 +1，避免刪除後重號
             int sketchNum = 1;
@@ -1626,7 +1774,7 @@ public class MainViewModel : INotifyPropertyChanged
     /// <summary>
     /// 收到 viewer 的 sketch_committed 訊息後提交草圖變更（§2.4）。
     /// </summary>
-    public async Task CommitSketchAsync(string featureId, string entitiesJson)
+    public async Task CommitSketchAsync(string featureId, string entitiesJson, string? constraintsJson = null)
     {
         if (_worker == null || _projectId == null) return;
         try
@@ -1636,11 +1784,18 @@ public class MainViewModel : INotifyPropertyChanged
             var entities = JsonSerializer.Deserialize<List<Dictionary<string, object>>>(entitiesJson)
                 ?? new List<Dictionary<string, object>>();
 
+            List<Dictionary<string, object>>? constraints = null;
+            if (constraintsJson != null)
+            {
+                constraints = JsonSerializer.Deserialize<List<Dictionary<string, object>>>(constraintsJson);
+            }
+
             var command = new CadCommand
             {
                 Action = "update_feature",
                 TargetFeatureId = featureId,
                 SketchEntities = entities,
+                Constraints = constraints,
             };
 
             var result = await _worker.ApplyCommandAsync(_projectId, command);
@@ -1661,6 +1816,49 @@ public class MainViewModel : INotifyPropertyChanged
     }
 
     /// <summary>
+    /// 收到 viewer 的 sketch_solve 訊息後呼叫求解端點（WP1-2，互動式，不進入歷史）。
+    /// </summary>
+    public async Task SolveSketchAsync(string featureId, string entitiesJson, string? constraintsJson)
+    {
+        if (_worker == null || _projectId == null) return;
+        try
+        {
+            var entities = JsonSerializer.Deserialize<List<Dictionary<string, object>>>(entitiesJson)
+                ?? new List<Dictionary<string, object>>();
+            var constraints = (constraintsJson != null)
+                ? JsonSerializer.Deserialize<List<Dictionary<string, object>>>(constraintsJson) ?? new()
+                : new List<Dictionary<string, object>>();
+
+            var result = await _worker.SolveSketchAsync(_projectId, featureId, entities, constraints);
+            if (result != null)
+            {
+                // result 已是 JSON 字串——再 Serialize 會變成帶引號的字串常值，
+                // viewer 端 opencadSolverResult 收到 string 而非物件（求解結果永遠套不上）
+                ViewerScriptRequested?.Invoke(ViewerBridge.BuildSolverResultScript(result));
+            }
+        }
+        catch (Exception ex)
+        {
+            // Solve failure = stay in place (silent fail)
+            System.Diagnostics.Debug.WriteLine($"Sketch solve failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// WP1-4: 接收 viewer 的量測結果（viewer overlay 已即時顯示；這裡入集合供 UI/紀錄使用）。
+    /// </summary>
+    public void AddMeasurement(string type, double value, string unit, string description)
+    {
+        Measurements.Add(new MeasurementResult
+        {
+            Type = type,
+            Value = value,
+            Unit = unit,
+            Description = description,
+        });
+    }
+
+    /// <summary>
     /// 取消草圖編輯——只需退出 viewer 草圖模式。
     /// </summary>
     public void CancelSketch()
@@ -1669,13 +1867,87 @@ public class MainViewModel : INotifyPropertyChanged
     }
 
     /// <summary>
+    /// WP1-3: 建立基準面（datum plane）——面偏移。
+    /// </summary>
+    public async Task CreateDatumPlaneAsync(string sourceRef, double offsetMm, string name = "")
+    {
+        if (_worker == null || _projectId == null) return;
+        IsBusy = true;
+        try
+        {
+            var datumId = $"datum_plane_{DateTime.Now:HHmmss}";
+            var definition = new Dictionary<string, object>
+            {
+                ["method"] = "offset",
+                ["source_ref"] = sourceRef,
+                ["offset_mm"] = offsetMm,
+            };
+            var result = await _worker.CreateReferenceGeometryAsync(_projectId, datumId, name, "plane", definition);
+            if (result != null)
+            {
+                await UpdateFeatureTreeAsync();
+                Messages.Add(ChatMessage.Assistant($"已建立基準面「{name}」（偏移 {offsetMm}mm）。"));
+            }
+        }
+        catch (Exception ex)
+        {
+            Messages.Add(ChatMessage.Error($"建立基準面失敗：{ex.Message}"));
+        }
+        finally { IsBusy = false; }
+    }
+
+    /// <summary>
+    /// WP1-3: 基準面建立對話框——提示使用者輸入偏移量。
+    /// </summary>
+    private async Task CreateDatumPlaneDialogAsync()
+    {
+        // 簡化：使用預設值（XY 面，偏移 10mm）——未來接 Avalonia 對話框
+        await CreateDatumPlaneAsync("face:f1.top", 10.0, "偏移基準面");
+    }
+
+    /// <summary>
+    /// WP1-3: 刪除基準幾何。
+    /// </summary>
+    public async Task DeleteReferenceGeometryAsync(string rgId)
+    {
+        if (_worker == null || _projectId == null) return;
+        IsBusy = true;
+        try
+        {
+            var actualId = rgId;
+            var ok = await _worker.DeleteReferenceGeometryAsync(_projectId, actualId);
+            if (ok)
+            {
+                await UpdateFeatureTreeAsync();
+                Messages.Add(ChatMessage.Assistant($"已刪除基準幾何「{actualId}」。"));
+            }
+        }
+        catch (Exception ex)
+        {
+            Messages.Add(ChatMessage.Error($"刪除基準幾何失敗：{ex.Message}"));
+        }
+        finally { IsBusy = false; }
+    }
+
+    /// <summary>
     /// 刪除目前選取的特徵。
     /// </summary>
     private async Task DeleteFeatureAsync()
     {
-        if (_selectedFeature == null || _selectedFeature.IsDatumPlane || _worker == null || _projectId == null) return;
+        if (_selectedFeature == null || _worker == null || _projectId == null) return;
 
         var featureId = _selectedFeature.FeatureId;
+
+        // WP1-3: 基準幾何刪除
+        if (_selectedFeature.ReferenceGeometryId is string rgIdToDelete)
+        {
+            await DeleteReferenceGeometryAsync(rgIdToDelete);
+            return;
+        }
+
+        // 內建基準面不可刪除
+        if (_selectedFeature.IsDatumPlane) return;
+
         IsBusy = true;
         try
         {
@@ -1718,6 +1990,129 @@ public class MainViewModel : INotifyPropertyChanged
         // 參數面板已在左下方顯示，選取特徵時自動更新；
         // 此命令確保右鍵「編輯參數」時面板可見。
         OnPropertyChanged(nameof(SelectedFeatureParameters));
+    }
+
+    /// <summary>
+    /// 抑制選取的特徵——v2 suppress_feature 命令。
+    /// </summary>
+    private async Task SuppressFeatureAsync()
+    {
+        if (_selectedFeature == null || _selectedFeature.IsDatumPlane || _worker == null || _projectId == null) return;
+
+        var featureId = _selectedFeature.FeatureId;
+        IsBusy = true;
+        try
+        {
+            var command = new CadCommand { Action = "suppress_feature", TargetFeatureId = featureId };
+            var result = await _worker.ApplyCommandAsync(_projectId, command);
+            if (result.Status == "error")
+            {
+                Messages.Add(ChatMessage.Error($"抑制失敗：{result.ErrorCode} — {result.EngineMessage}"));
+                return;
+            }
+            Messages.Add(ChatMessage.Assistant($"已抑制特徵「{featureId}」，重建中…"));
+            await UpdateFeatureTreeAsync();
+            await RebuildAsync();
+        }
+        catch (Exception ex)
+        {
+            Messages.Add(ChatMessage.Error($"抑制特徵失敗：{ex.Message}"));
+        }
+        finally { IsBusy = false; }
+    }
+
+    /// <summary>
+    /// 取消抑制選取的特徵——v2 unsuppress_feature 命令。
+    /// </summary>
+    private async Task UnsuppressFeatureAsync()
+    {
+        if (_selectedFeature == null || _selectedFeature.IsDatumPlane || _worker == null || _projectId == null) return;
+
+        var featureId = _selectedFeature.FeatureId;
+        IsBusy = true;
+        try
+        {
+            var command = new CadCommand { Action = "unsuppress_feature", TargetFeatureId = featureId };
+            var result = await _worker.ApplyCommandAsync(_projectId, command);
+            if (result.Status == "error")
+            {
+                Messages.Add(ChatMessage.Error($"取消抑制失敗：{result.ErrorCode} — {result.EngineMessage}"));
+                return;
+            }
+            Messages.Add(ChatMessage.Assistant($"已取消抑制特徵「{featureId}」，重建中…"));
+            await UpdateFeatureTreeAsync();
+            await RebuildAsync();
+        }
+        catch (Exception ex)
+        {
+            Messages.Add(ChatMessage.Error($"取消抑制失敗：{ex.Message}"));
+        }
+        finally { IsBusy = false; }
+    }
+
+    /// <summary>
+    /// 回溯到選取特徵——v2 set_rollback 命令，rollback_position = 特徵的 order。
+    /// </summary>
+    private async Task RollbackToHereAsync()
+    {
+        if (_selectedFeature == null || _selectedFeature.IsDatumPlane || _worker == null || _projectId == null) return;
+
+        var order = _selectedFeature.Order;
+        IsBusy = true;
+        try
+        {
+            var command = new CadCommand
+            {
+                Action = "set_rollback",
+                Parameters = new Dictionary<string, object> { ["rollback_position"] = order },
+            };
+            var result = await _worker.ApplyCommandAsync(_projectId, command);
+            if (result.Status == "error")
+            {
+                Messages.Add(ChatMessage.Error($"回溯失敗：{result.ErrorCode} — {result.EngineMessage}"));
+                return;
+            }
+            Messages.Add(ChatMessage.Assistant($"已回溯到特徵「{_selectedFeature.DisplayName}」(order={order})，重建中…"));
+            await UpdateFeatureTreeAsync();
+            await RebuildAsync();
+        }
+        catch (Exception ex)
+        {
+            Messages.Add(ChatMessage.Error($"回溯失敗：{ex.Message}"));
+        }
+        finally { IsBusy = false; }
+    }
+
+    /// <summary>
+    /// 回到末端——v2 set_rollback 命令，rollback_position = null（重建全部）。
+    /// </summary>
+    private async Task RollbackToEndAsync()
+    {
+        if (_worker == null || _projectId == null) return;
+
+        IsBusy = true;
+        try
+        {
+            var command = new CadCommand
+            {
+                Action = "set_rollback",
+                Parameters = new Dictionary<string, object> { ["rollback_position"] = null! },
+            };
+            var result = await _worker.ApplyCommandAsync(_projectId, command);
+            if (result.Status == "error")
+            {
+                Messages.Add(ChatMessage.Error($"回到末端失敗：{result.ErrorCode} — {result.EngineMessage}"));
+                return;
+            }
+            Messages.Add(ChatMessage.Assistant("已回到末端，重建全部特徵…"));
+            await UpdateFeatureTreeAsync();
+            await RebuildAsync();
+        }
+        catch (Exception ex)
+        {
+            Messages.Add(ChatMessage.Error($"回到末端失敗：{ex.Message}"));
+        }
+        finally { IsBusy = false; }
     }
 
     /// <summary>
@@ -1816,6 +2211,40 @@ public class MainViewModel : INotifyPropertyChanged
                 IsDatumPlane = true,
             });
 
+            // WP1-3: 基準幾何資料夾——datum plane/axis/point
+            var refGeomNodes = new List<FeatureNode>();
+            if (projectInfo.TryGetProperty("features", out var featuresEl2) &&
+                featuresEl2.ValueKind == JsonValueKind.Object &&
+                featuresEl2.TryGetProperty("reference_geometry", out var rgEl) &&
+                rgEl.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var rg in rgEl.EnumerateArray())
+                {
+                    var rgId = rg.TryGetProperty("id", out var rgIdEl) ? rgIdEl.GetString() ?? "" : "";
+                    var rgName = rg.TryGetProperty("name", out var rgNameEl) ? rgNameEl.GetString() ?? rgId : rgId;
+                    var rgKind = rg.TryGetProperty("kind", out var rgKindEl) ? rgKindEl.GetString() ?? "" : "";
+                    refGeomNodes.Add(new FeatureNode
+                    {
+                        FeatureId = $"__rg_{rgId}",  // 僅作樹節點唯一鍵；判別/取 id 一律用 ReferenceGeometryId
+                        ReferenceGeometryId = rgId,
+                        DisplayName = $"{rgName} ({rgKind})",
+                        FeatureType = $"datum_{rgKind}",
+                        IsDatumPlane = rgKind == "plane",
+                    });
+                }
+            }
+            if (refGeomNodes.Count > 0)
+            {
+                FeatureTree.Add(new FeatureNode
+                {
+                    FeatureId = "__ref_geom_folder",
+                    DisplayName = "基準幾何",
+                    FeatureType = "folder",
+                    IsDatumPlane = true,
+                });
+                foreach (var n in refGeomNodes) FeatureTree.Add(n);
+            }
+
             if (projectInfo.TryGetProperty("features", out var featuresEl))
             {
                 // 新版 graph 格式為 {schema_version, features: [...]}——先解開包裝
@@ -1872,6 +2301,12 @@ public class MainViewModel : INotifyPropertyChanged
                 FeatureId = fid,
                 DisplayName = $"{name} ({type}{planeSuffix})",
                 FeatureType = type,
+                State = featEl.TryGetProperty("state", out var stateEl) && stateEl.ValueKind == JsonValueKind.String
+                    ? stateEl.GetString() ?? "active"
+                    : "active",
+                Order = featEl.TryGetProperty("order", out var orderEl) && orderEl.ValueKind == JsonValueKind.Number
+                    ? orderEl.GetInt32()
+                    : 0,
             };
 
             // 抽出實際參數供參數面板顯示。
@@ -1925,6 +2360,10 @@ public class MainViewModel : INotifyPropertyChanged
             CanEditSketch = false;
             ((AsyncRelayCommand)DeleteFeatureCommand).RaiseCanExecuteChanged();
             ((RelayCommand)EditParametersCommand).RaiseCanExecuteChanged();
+            ((AsyncRelayCommand)SuppressFeatureCommand).RaiseCanExecuteChanged();
+            ((AsyncRelayCommand)UnsuppressFeatureCommand).RaiseCanExecuteChanged();
+            ((AsyncRelayCommand)RollbackToHereCommand).RaiseCanExecuteChanged();
+            ((AsyncRelayCommand)RollbackToEndCommand).RaiseCanExecuteChanged();
 
             if (_selectedFeature != null && _selectedFeature.IsDatumPlane)
             {
@@ -1954,6 +2393,10 @@ public class MainViewModel : INotifyPropertyChanged
         // 更新右鍵選單命令可用狀態
         ((AsyncRelayCommand)DeleteFeatureCommand).RaiseCanExecuteChanged();
         ((RelayCommand)EditParametersCommand).RaiseCanExecuteChanged();
+        ((AsyncRelayCommand)SuppressFeatureCommand).RaiseCanExecuteChanged();
+        ((AsyncRelayCommand)UnsuppressFeatureCommand).RaiseCanExecuteChanged();
+        ((AsyncRelayCommand)RollbackToHereCommand).RaiseCanExecuteChanged();
+        ((AsyncRelayCommand)RollbackToEndCommand).RaiseCanExecuteChanged();
 
         // 高亮對應 mesh
         ViewerScriptRequested?.Invoke($"highlightByName('{featureId}');");
@@ -2015,6 +2458,94 @@ public class MainViewModel : INotifyPropertyChanged
         }
     }
 
+    /// <summary>
+    /// WP1-4: 一次套用所有已編輯的參數（Apply All）。
+    /// </summary>
+    private async Task ApplyAllParametersAsync()
+    {
+        if (_worker == null || _projectId == null || _selectedFeature == null) return;
+
+        var dirtyItems = SelectedFeatureParameters.Where(p => p.IsDirty).ToList();
+        if (dirtyItems.Count == 0) return;
+
+        try
+        {
+            IsBusy = true;
+            var updates = new Dictionary<string, object>();
+            foreach (var item in dirtyItems)
+            {
+                if (double.TryParse(item.Value, out var number))
+                {
+                    if (number <= 0 && item.Key is "length" or "width" or "height" or "depth" or "diameter" or "radius" or "thickness")
+                    {
+                        Messages.Add(ChatMessage.Error($"參數 {item.Key} 必須大於 0。"));
+                        return;
+                    }
+                    updates[item.Key] = number;
+                }
+                else
+                {
+                    updates[item.Key] = item.Value;
+                }
+            }
+
+            var command = new CadCommand
+            {
+                Action = "update_feature",
+                TargetFeatureId = _selectedFeature.FeatureId,
+                Parameters = updates,
+            };
+            var result = await _worker.ApplyCommandAsync(_projectId, command);
+            if (result.Status == "error")
+            {
+                Messages.Add(ChatMessage.Error($"參數更新失敗：{result.ErrorCode} — {result.EngineMessage}"));
+                return;
+            }
+
+            foreach (var item in dirtyItems)
+                item.OriginalValue = item.Value;
+
+            Messages.Add(ChatMessage.Assistant($"已更新 {dirtyItems.Count} 個參數，重建中…"));
+            await RebuildAsync();
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "ApplyAllParametersAsync 失敗");
+            Messages.Add(ChatMessage.Error($"參數批次更新失敗：{ex.Message}"));
+        }
+        finally { IsBusy = false; }
+    }
+
+    /// <summary>
+    /// WP1-4: 隔離選取特徵（其他特徵隱藏）。
+    /// </summary>
+    private async Task IsolateFeatureAsync()
+    {
+        if (_selectedFeature == null) return;
+        IsolatedFeatureId = _selectedFeature.FeatureId;
+        await Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// WP1-4: 隱藏選取特徵。
+    /// </summary>
+    private async Task HideFeatureAsync()
+    {
+        if (_selectedFeature == null) return;
+        ViewerScriptRequested?.Invoke($"hideFeature('{_selectedFeature.FeatureId}');");
+        await Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// WP1-4: 顯示所有特徵（取消隔離與隱藏）。
+    /// </summary>
+    private async Task ShowAllFeaturesAsync()
+    {
+        IsolatedFeatureId = null;
+        ViewerScriptRequested?.Invoke("showAllFeatures();");
+        await Task.CompletedTask;
+    }
+
     private string? FindExamplesDir()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
@@ -2059,6 +2590,18 @@ public class MainViewModel : INotifyPropertyChanged
         }
     }
 
+    /// <summary>
+    /// 由 face picking 選中的 source_feature_id 反查特徵樹節點並選取。
+    /// </summary>
+    public void SelectFeatureById(string featureId)
+    {
+        var node = FeatureTree.FirstOrDefault(n => n.FeatureId == featureId);
+        if (node != null)
+        {
+            SelectedFeature = node;
+        }
+    }
+
     private void RefreshCanExecute()
     {
         ((AsyncRelayCommand)SendCommand).RaiseCanExecuteChanged();
@@ -2072,7 +2615,16 @@ public class MainViewModel : INotifyPropertyChanged
         ((AsyncRelayCommand)EditSketchCommand).RaiseCanExecuteChanged();
         ((AsyncRelayCommand)DeleteFeatureCommand).RaiseCanExecuteChanged();
         ((RelayCommand)EditParametersCommand).RaiseCanExecuteChanged();
+        ((AsyncRelayCommand)SuppressFeatureCommand).RaiseCanExecuteChanged();
+        ((AsyncRelayCommand)UnsuppressFeatureCommand).RaiseCanExecuteChanged();
+        ((AsyncRelayCommand)RollbackToHereCommand).RaiseCanExecuteChanged();
+        ((AsyncRelayCommand)RollbackToEndCommand).RaiseCanExecuteChanged();
         ((AsyncRelayCommand)ExportChatCommand).RaiseCanExecuteChanged();
+        ((AsyncRelayCommand)CreateDatumPlaneCommand).RaiseCanExecuteChanged();
+        ((AsyncRelayCommand)ApplyAllParametersCommand).RaiseCanExecuteChanged();
+        ((AsyncRelayCommand)IsolateFeatureCommand).RaiseCanExecuteChanged();
+        ((AsyncRelayCommand)HideFeatureCommand).RaiseCanExecuteChanged();
+        ((AsyncRelayCommand)ShowAllFeaturesCommand).RaiseCanExecuteChanged();
         OnPropertyChanged(nameof(HasProject));
     }
 

@@ -19,7 +19,10 @@ public class ViewerBridge
         Error,
         SketchCommitted,
         SketchCancelled,
+        SketchSolve,
         DatumPlaneClicked,
+        FaceSelected,
+        MeasurementResult,
     }
 
     public record ViewerMessage(
@@ -28,7 +31,15 @@ public class ViewerBridge
         string? ErrorMessage = null,
         string? FeatureId = null,
         string? EntitiesJson = null,
-        string? DatumPlaneName = null);
+        string? ConstraintsJson = null,
+        string? DatumPlaneName = null,
+        string? BrepFaceRef = null,
+        string? SourceFeatureId = null,
+        int MeshRevision = 0,
+        string? MeasurementType = null,
+        double MeasurementValue = 0,
+        string? MeasurementUnit = null,
+        string? MeasurementDescription = null);
 
     /// <summary>
     /// 解析來自 WebView 的訊息。
@@ -47,7 +58,10 @@ public class ViewerBridge
                 "error" => MessageType.Error,
                 "sketch_committed" => MessageType.SketchCommitted,
                 "sketch_cancelled" => MessageType.SketchCancelled,
+                "sketch_solve" => MessageType.SketchSolve,
                 "datum_plane_clicked" => MessageType.DatumPlaneClicked,
+                "face_selected" => MessageType.FaceSelected,
+                "measurement_result" => MessageType.MeasurementResult,
                 _ => (MessageType?)null,
             };
 
@@ -61,19 +75,53 @@ public class ViewerBridge
                 ? element.TryGetProperty("message", out var msg) ? msg.GetString() : null
                 : null;
 
-            string? featureId = type == MessageType.SketchCommitted
+            string? featureId = (type == MessageType.SketchCommitted || type == MessageType.SketchSolve)
                 ? element.TryGetProperty("feature_id", out var fid) ? fid.GetString() : null
                 : null;
 
-            string? entitiesJson = type == MessageType.SketchCommitted
+            string? entitiesJson = (type == MessageType.SketchCommitted || type == MessageType.SketchSolve)
                 ? element.TryGetProperty("entities", out var ents) ? ents.GetRawText() : null
+                : null;
+
+            string? constraintsJson = (type == MessageType.SketchCommitted || type == MessageType.SketchSolve)
+                ? element.TryGetProperty("constraints", out var cons) ? cons.GetRawText() : null
                 : null;
 
             string? datumPlaneName = type == MessageType.DatumPlaneClicked
                 ? element.TryGetProperty("name", out var dname) ? dname.GetString() : null
                 : null;
 
-            return new ViewerMessage(type.Value, objectId, errorMsg, featureId, entitiesJson, datumPlaneName);
+            string? brepFaceRef = type == MessageType.FaceSelected
+                ? element.TryGetProperty("brep_face_ref", out var bfr) ? bfr.GetString() : null
+                : null;
+
+            string? sourceFeatureId = type == MessageType.FaceSelected
+                ? element.TryGetProperty("source_feature_id", out var sfi) ? sfi.GetString() : null
+                : null;
+
+            int meshRevision = type == MessageType.FaceSelected
+                ? element.TryGetProperty("mesh_revision", out var mrev) ? mrev.GetInt32() : 0
+                : 0;
+
+            string? measurementType = null;
+            double measurementValue = 0;
+            string? measurementUnit = null;
+            string? measurementDescription = null;
+            if (type == MessageType.MeasurementResult)
+            {
+                measurementType = element.TryGetProperty("measurement_type", out var mt) ? mt.GetString() : null;
+                // value 由 JS 以字串（toFixed）或數值送出——兩種都接受
+                if (element.TryGetProperty("value", out var mv))
+                {
+                    if (mv.ValueKind == JsonValueKind.Number) measurementValue = mv.GetDouble();
+                    else if (mv.ValueKind == JsonValueKind.String && double.TryParse(mv.GetString(), out var parsed)) measurementValue = parsed;
+                }
+                measurementUnit = element.TryGetProperty("unit", out var mu) ? mu.GetString() : null;
+                measurementDescription = element.TryGetProperty("description", out var md) ? md.GetString() : null;
+            }
+
+            return new ViewerMessage(type.Value, objectId, errorMsg, featureId, entitiesJson, constraintsJson, datumPlaneName, brepFaceRef, sourceFeatureId, meshRevision,
+                measurementType, measurementValue, measurementUnit, measurementDescription);
         }
         catch
         {
@@ -88,7 +136,14 @@ public class ViewerBridge
         $"loadModel('{glbUrl}');";
 
     /// <summary>
-    /// �構構切換視角的 JavaScript 呼叫字串。
+    /// 建構載入模型 + display_map 的 JavaScript 呼叫字串。
+    /// display_map 提供面/邊拓撲對應表，供 viewer 精確 picking。
+    /// </summary>
+    public static string BuildLoadScript(string glbUrl, string displayMapUrl) =>
+        $"loadModelWithMap('{glbUrl}', '{displayMapUrl}');";
+
+    /// <summary>
+    /// 建構切換視角的 JavaScript 呼叫字串。
     /// </summary>
     public static string BuildSetViewScript(string view) =>
         $"setView('{view}');";
@@ -112,4 +167,10 @@ public class ViewerBridge
     /// </summary>
     public static string BuildExitSketchScript() =>
         "exitSketchMode();";
+
+    /// <summary>
+    /// 建構將求解器結果送回 viewer 的 JavaScript 呼叫字串（WP1-2）。
+    /// </summary>
+    public static string BuildSolverResultScript(string resultJson) =>
+        $"opencadSolverResult({resultJson});";
 }

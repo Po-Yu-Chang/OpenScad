@@ -105,10 +105,47 @@ public class CadWorkerClient : ICadWorker
         {
             Status = result.Value.TryGetProperty("status", out var st) ? st.GetString() ?? "" : "",
             FeatureCount = result.Value.TryGetProperty("feature_count", out var fc) ? fc.GetInt32() : 0,
+            MeshRevision = result.Value.TryGetProperty("mesh_revision", out var mr) ? mr.GetInt32() : 0,
             ErrorCode = result.Value.TryGetProperty("error_code", out var ec) ? ec.GetString() : null,
             EngineMessage = result.Value.TryGetProperty("engine_message", out var em) ? em.GetString() : null,
             MassProperties = result.Value.TryGetProperty("mass_properties", out var mp) ? ParseMassProperties(mp) : null,
         };
+    }
+
+    public async Task<RebuildResult> RebuildStagingAsync(string projectId)
+    {
+        var response = await _httpClient.PostAsync($"/api/projects/{projectId}/rebuild?dry_run=true", null);
+        var body = await response.Content.ReadAsStringAsync();
+
+        JsonElement? result = null;
+        if (!response.IsSuccessStatusCode && !TryParseStructuredError(body, out result))
+        {
+            return new RebuildResult
+            {
+                Status = "error",
+                ErrorCode = "TRANSPORT_ERROR",
+                EngineMessage = $"HTTP {response.StatusCode}: {body}",
+            };
+        }
+
+        result ??= JsonSerializer.Deserialize<JsonElement>(body, JsonOpts);
+
+        return new RebuildResult
+        {
+            Status = result.Value.TryGetProperty("status", out var st) ? st.GetString() ?? "" : "",
+            FeatureCount = result.Value.TryGetProperty("feature_count", out var fc) ? fc.GetInt32() : 0,
+            ErrorCode = result.Value.TryGetProperty("error_code", out var ec) ? ec.GetString() : null,
+            EngineMessage = result.Value.TryGetProperty("engine_message", out var em) ? em.GetString() : null,
+            MassProperties = result.Value.TryGetProperty("mass_properties", out var mp) ? ParseMassProperties(mp) : null,
+        };
+    }
+
+    public async Task<string?> GetCapabilityAsync()
+    {
+        var response = await _httpClient.GetAsync("/api/capability");
+        if (!response.IsSuccessStatusCode)
+            return null;
+        return await response.Content.ReadAsStringAsync();
     }
 
     /// <summary>
@@ -192,9 +229,26 @@ public class CadWorkerClient : ICadWorker
         return result.GetProperty("path").GetString()!;
     }
 
-    public string GetPreviewUrl(string projectId)
+    public async Task<string> GetPreviewUrlAsync(string projectId)
     {
-        return $"{_httpClient.BaseAddress}api/projects/{projectId}/preview.glb?token={_sessionToken}&t={_rebuildCount}";
+        // WP-H2：URL 只放短時效預簽 token（單次有效），靜態 SESSION_TOKEN 不進 URL/log
+        var token = await GetPresignedTokenAsync();
+        return $"{_httpClient.BaseAddress}api/projects/{projectId}/preview.glb?token={token}&t={_rebuildCount}";
+    }
+
+    public async Task<string> GetDisplayMapUrlAsync(string projectId)
+    {
+        var token = await GetPresignedTokenAsync();
+        return $"{_httpClient.BaseAddress}api/projects/{projectId}/display_map?token={token}&t={_rebuildCount}";
+    }
+
+    private async Task<string> GetPresignedTokenAsync()
+    {
+        var response = await _httpClient.PostAsync("/api/presign", null);
+        response.EnsureSuccessStatusCode();
+        var body = await response.Content.ReadAsStringAsync();
+        var result = JsonSerializer.Deserialize<JsonElement>(body);
+        return result.GetProperty("presigned_token").GetString()!;
     }
 
     private int _rebuildCount;
@@ -345,5 +399,44 @@ public class CadWorkerClient : ICadWorker
     {
         var response = await _httpClient.PostAsync($"/api/projects/{projectId}/reset", null);
         return response.IsSuccessStatusCode;
+    }
+
+    /// <summary>
+    /// 求解草圖約束（WP1-2，互動式，不進入歷史）。
+    /// 回傳 {entities, solver_status} JSON 字串。
+    /// </summary>
+    public async Task<string?> SolveSketchAsync(string projectId, string featureId, List<Dictionary<string, object>> entities, List<Dictionary<string, object>> constraints)
+    {
+        var req = new { entities, constraints };
+        var json = JsonSerializer.Serialize(req, JsonOpts);
+        var content = new StringContent(json, Encoding.UTF8, "application/json");
+
+        var response = await _httpClient.PostAsync($"/api/projects/{projectId}/sketch/{featureId}/solve", content);
+        if (!response.IsSuccessStatusCode) return null;
+        return await response.Content.ReadAsStringAsync();
+    }
+
+    public async Task<string?> CreateReferenceGeometryAsync(string projectId, string id, string name, string kind, Dictionary<string, object> definition)
+    {
+        var req = new { id, name, kind, definition };
+        var json = JsonSerializer.Serialize(req, JsonOpts);
+        var content = new StringContent(json, Encoding.UTF8, "application/json");
+
+        var response = await _httpClient.PostAsync($"/api/projects/{projectId}/reference_geometry", content);
+        if (!response.IsSuccessStatusCode) return null;
+        return await response.Content.ReadAsStringAsync();
+    }
+
+    public async Task<bool> DeleteReferenceGeometryAsync(string projectId, string rgId)
+    {
+        var response = await _httpClient.DeleteAsync($"/api/projects/{projectId}/reference_geometry/{rgId}");
+        return response.IsSuccessStatusCode;
+    }
+
+    public async Task<string?> ListReferenceGeometryAsync(string projectId)
+    {
+        var response = await _httpClient.GetAsync($"/api/projects/{projectId}/reference_geometry");
+        if (!response.IsSuccessStatusCode) return null;
+        return await response.Content.ReadAsStringAsync();
     }
 }

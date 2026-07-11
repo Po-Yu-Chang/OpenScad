@@ -15,6 +15,9 @@ class CommandValidator:
         "fillet": ["radius"],  # radius_mm 也接受
         "chamfer": ["radius"],
         "shell": ["thickness"],
+        "rib": ["thickness"],
+        "thin": ["length", "thickness"],
+        "countersink": ["diameter"],
     }
 
     # 每個特徵類型的必要 input（必須指向上游）
@@ -23,6 +26,8 @@ class CommandValidator:
         "shell", "sweep", "loft", "mirror",
         "linear_pattern", "circular_pattern",
         "boolean_union", "boolean_difference", "boolean_intersection",
+        "draft", "rib", "thin", "variable_fillet",
+        "countersink", "cosmetic_thread",
     }
 
     # 必須有 references 的特徵
@@ -47,8 +52,37 @@ class CommandValidator:
         elif action in ("delete_feature", "delete_feature_recursive"):
             if not command.get("target_feature_id"):
                 errors.append(f"{action} 需要 target_feature_id")
+        elif action in ("suppress_feature", "unsuppress_feature"):
+            if not command.get("target_feature_id"):
+                errors.append(f"{action} 需要 target_feature_id")
+        elif action == "reorder_feature":
+            if not command.get("target_feature_id"):
+                errors.append("reorder_feature 需要 target_feature_id")
+            params = command.get("parameters", {})
+            if not params or "new_order" not in params:
+                errors.append("reorder_feature 需要 parameters.new_order")
+        elif action == "set_rollback":
+            params = command.get("parameters", {})
+            if not params or "rollback_position" not in params:
+                errors.append("set_rollback 需要 parameters.rollback_position（null 或整數）")
         elif action in ("rebuild", "validate", "export", "set_material"):
             pass
+        elif action == "create_reference_geometry":
+            rg = command.get("reference_geometry")
+            if rg is None:
+                errors.append("create_reference_geometry 需要 reference_geometry 欄位")
+            else:
+                if not rg.get("id"):
+                    errors.append("reference_geometry 需要 id")
+                if not rg.get("kind"):
+                    errors.append("reference_geometry 需要 kind")
+                if not rg.get("definition"):
+                    errors.append("reference_geometry 需要 definition")
+        elif action in ("update_reference_geometry", "delete_reference_geometry"):
+            if not command.get("target_feature_id"):
+                errors.append(f"{action} 需要 target_feature_id")
+            if action == "update_reference_geometry" and not command.get("reference_geometry"):
+                errors.append("update_reference_geometry 需要 reference_geometry 欄位")
         else:
             errors.append(f"未知的 action: {action}")
 
@@ -124,5 +158,6 @@ class CommandValidator:
         if (command.get("parameters") is None and
                 command.get("standard_parts") is None and
                 command.get("sketch_entities") is None and
-                command.get("plane") is None):
-            errors.append("update_feature 需要 parameters、standard_parts、sketch_entities 或 plane 至少一項")
+                command.get("plane") is None and
+                command.get("constraints") is None):
+            errors.append("update_feature 需要 parameters、standard_parts、sketch_entities、plane 或 constraints 至少一項")

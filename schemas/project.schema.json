@@ -2,13 +2,14 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://opencad.dev/schemas/project.schema.json",
   "title": "OpenCad Project Manifest",
-  "description": "專案 manifest.json，描述專案基本資訊與設定",
+  "description": "專案 manifest.json，描述專案基本資訊與設定（schema v2）",
   "type": "object",
   "required": ["schema_version", "project_id", "name", "created_at", "units"],
   "properties": {
     "schema_version": {
       "type": "string",
-      "const": "1.0"
+      "enum": ["1.0", "2.0"],
+      "description": "schema 版本。v1 自動遷移到 v2。"
     },
     "project_id": {
       "type": "string",
@@ -21,6 +22,12 @@
     "description": {
       "type": "string",
       "description": "專案描述"
+    },
+    "document_type": {
+      "type": "string",
+      "enum": ["part", "assembly"],
+      "default": "part",
+      "description": "文件類型（v2 新增）"
     },
     "created_at": {
       "type": "string",
@@ -41,6 +48,77 @@
       "enum": ["build123d", "freecad"],
       "default": "build123d",
       "description": "建模引擎"
+    },
+    "bodies": {
+      "type": "array",
+      "description": "實體清單（v2 新增）",
+      "items": {
+        "type": "object",
+        "required": ["id", "name"],
+        "properties": {
+          "id": { "type": "string", "description": "實體唯一識別碼" },
+          "name": { "type": "string", "description": "實體顯示名稱" },
+          "material": { "type": "string", "description": "材質（如 AL6061）" },
+          "appearance": { "type": ["string", "null"], "description": "外觀樣式識別碼" }
+        }
+      },
+      "default": [{"id": "body1", "name": "主體", "material": "", "appearance": null}]
+    },
+    "reference_geometry": {
+      "type": "array",
+      "description": "基準幾何清單（v2 新增，WP1-3 填充）",
+      "items": {
+        "type": "object",
+        "required": ["id", "type"],
+        "properties": {
+          "id": { "type": "string" },
+          "type": { "type": "string", "enum": ["plane", "axis", "point", "csys"] },
+          "name": { "type": "string" },
+          "definition": { "type": "object", "description": "基準定義（WP1-3 填充）" }
+        }
+      },
+      "default": []
+    },
+    "rollback_position": {
+      "type": ["integer", "null"],
+      "description": "回溯位置。null=末端（重建全部）。整數=重建到該 order（v2 新增）"
+    },
+    "global_variables": {
+      "type": "array",
+      "description": "全域變數（v2 新增，WP2-1 填充）",
+      "items": {
+        "type": "object",
+        "required": ["name", "expression"],
+        "properties": {
+          "name": { "type": "string" },
+          "expression": { "type": "string" },
+          "unit": { "type": "string", "default": "mm" }
+        }
+      },
+      "default": []
+    },
+    "configurations": {
+      "type": "array",
+      "description": "組態（v2 新增，WP2-2 填充）",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string" },
+          "parent": { "type": ["string", "null"] },
+          "overrides": { "type": "object" }
+        }
+      },
+      "default": []
+    },
+    "active_configuration": {
+      "type": ["string", "null"],
+      "description": "目前作用組態名稱（v2 新增）"
+    },
+    "custom_properties": {
+      "type": "object",
+      "description": "自訂屬性（v2 新增）",
+      "default": {}
     },
     "llm_model": {
       "type": "string",

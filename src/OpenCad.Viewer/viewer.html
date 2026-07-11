@@ -56,6 +56,20 @@
         #sketch-toolbar button.active { background: #89b4fa; color: #1e1e2e; }
         #sketch-toolbar .separator { color: #45475a; margin: 0 2px; }
 
+        /* Constraint / DOF Status Bar (bottom center, sketch mode) */
+        #constraint-status {
+            position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%);
+            display: none; gap: 8px; align-items: center;
+            background: rgba(30,30,46,0.9); border-radius: 8px; padding: 4px 12px;
+            z-index: 20; font-family: monospace; font-size: 12px; color: #cdd6f4;
+        }
+        #constraint-status .dof-full { color: #a6e3a1; }
+        #constraint-status .dof-under { color: #f9e2af; }
+        #constraint-status .dof-over { color: #f38ba8; }
+        #constraint-status .conflict-item {
+            color: #f38ba8; cursor: pointer; text-decoration: underline;
+        }
+
         /* Confirmation Corner (top right) */
         #confirm-corner {
             position: absolute; top: 10px; right: 10px;
@@ -152,6 +166,16 @@
         <button id="tool-line" onclick="sketchTool('line')">╱ 線</button>
         <button id="tool-arc" onclick="sketchTool('arc')">◜ 弧</button>
         <span class="separator">|</span>
+        <button onclick="addConstraint('horizontal')">━ 水平</button>
+        <button onclick="addConstraint('vertical')">┃ 鉛直</button>
+        <button onclick="addConstraint('coincident')">⊙ 重合</button>
+        <button onclick="addConstraint('distance')">↔ 距離</button>
+        <button onclick="addConstraint('radius')">R 半徑</button>
+        <button onclick="addConstraint('equal')">= 等長</button>
+        <button onclick="addConstraint('parallel')">∥ 平行</button>
+        <button onclick="addConstraint('perpendicular')">⊥ 垂直</button>
+        <button onclick="addConstraint('concentric')">◎ 同心</button>
+        <span class="separator">|</span>
         <button onclick="sketchDeleteSelected()">🗑 刪除</button>
     </div>
 
@@ -159,6 +183,12 @@
     <div id="confirm-corner">
         <button class="btn-ok" onclick="sketchCommit()">✓</button>
         <button class="btn-cancel" onclick="sketchCancel()">✗</button>
+    </div>
+
+    <!-- Constraint / DOF Status Bar -->
+    <div id="constraint-status">
+        <span id="dof-text">自由度：—</span>
+        <span id="conflict-list"></span>
     </div>
 
     <!-- PropertyManager Dialog -->
@@ -260,12 +290,91 @@
         let highlightedMesh = null;
         let originalMaterial = null;
 
-        renderer.domElement.addEventListener('click', (event) => {
-            if (sketchMode) return;
+        // ─── display_map 狀態 ───
+        let displayMap = null;       // display_map JSON（面/邊拓撲對應表）
+        let currentMeshRevision = 0;  // 目前載入的 mesh_revision
+
+        // ─── 拖曳偵測（mousedown→mouseup 位移 >4px 視為旋轉，不觸發選取）───
+        let mouseDownPos = null;
+        renderer.domElement.addEventListener('mousedown', (event) => {
+            mouseDownPos = { x: event.clientX, y: event.clientY };
+        });
+
+        // 共用 picking：滑鼠事件 → NDC → raycast（量測與選取都走這裡，改 picking 數學只改一處）
+        function pickAtEvent(event) {
             mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
             mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
             raycaster.setFromCamera(mouse, camera);
-            const intersects = raycaster.intersectObjects([...scene.children, ...datumGroup.children], true);
+            return raycaster.intersectObjects([...scene.children, ...datumGroup.children], true);
+        }
+
+        // 共用高亮：材質置換（黃色）；opts 可覆寫 transparent/opacity 等
+        function highlightMesh(mesh, opts) {
+            if (highlightedMesh && originalMaterial) {
+                highlightedMesh.material = originalMaterial;
+            }
+            highlightedMesh = mesh;
+            originalMaterial = mesh.material.clone();
+            mesh.material = new THREE.MeshStandardMaterial(Object.assign({
+                color: 0xf9e2af,
+                metalness: 0.3,
+                roughness: 0.4,
+            }, opts || {}));
+        }
+
+        renderer.domElement.addEventListener('click', (event) => {
+            if (sketchMode) return;
+            // 拖曳偵測：mousedown→click 位移 >4px = 旋轉，不是點擊選取
+            if (mouseDownPos) {
+                const dx = event.clientX - mouseDownPos.x;
+                const dy = event.clientY - mouseDownPos.y;
+                if (Math.sqrt(dx * dx + dy * dy) > 4) return;
+            }
+            // WP1-4: 量測模式——點擊收集面/點，計算距離
+            if (measureMode) {
+                const intersects = pickAtEvent(event);
+                for (const intersect of intersects) {
+                    if (intersect.object.isMesh && intersect.object !== grid) {
+                        const point = intersect.point.clone();
+                        measurePoints.push(point);
+                        // 標記點
+                        const marker = new THREE.Mesh(
+                            new THREE.SphereGeometry(1.5, 16, 16),
+                            new THREE.MeshBasicMaterial({ color: 0xff6b35 })
+                        );
+                        marker.position.copy(point);
+                        scene.add(marker);
+                        measureLabels.push(marker);
+                        // 兩點時計算距離
+                        if (measurePoints.length >= 2) {
+                            const p1 = measurePoints[0];
+                            const p2 = measurePoints[1];
+                            const dist = p1.distanceTo(p2);
+                            // 畫線
+                            const geom = new THREE.BufferGeometry().setFromPoints([p1, p2]);
+                            const line = new THREE.Line(geom, new THREE.LineBasicMaterial({ color: 0xff6b35, linewidth: 2 }));
+                            scene.add(line);
+                            measureLabels.push(line);
+                            // 通知主程式
+                            window.opencadNotify({
+                                type: 'measurement_result',
+                                measurement_type: 'distance',
+                                value: dist.toFixed(2),
+                                unit: 'mm',
+                                description: '兩點距離: ' + dist.toFixed(2) + ' mm'
+                            });
+                            document.getElementById('highlight-indicator').textContent =
+                                '量測結果: ' + dist.toFixed(2) + ' mm';
+                            document.getElementById('highlight-indicator').style.display = 'block';
+                            // 重置以進行下一次量測
+                            measurePoints = [];
+                        }
+                        break;
+                    }
+                }
+                return;
+            }
+            const intersects = pickAtEvent(event);
             for (const intersect of intersects) {
                 if (intersect.object.name.startsWith('__plane_')) {
                     // 隱藏中的基準面不攔截點擊——讓射線繼續檢查後面的模型
@@ -277,18 +386,29 @@
                     break;
                 }
                 if (intersect.object.isMesh && intersect.object !== grid) {
-                    // 高亮選取
-                    if (highlightedMesh && originalMaterial) {
-                        highlightedMesh.material = originalMaterial;
+                    // ── display_map picking：三角面索引 → face 查詢 ──
+                    // （displayMap 只由 loadModelWithMap 設定、loadModel 會清空——
+                    //   保證 map 與場景中的 GLB 永遠來自同一次載入，不需逐面 revision 檢查）
+                    if (displayMap && intersect.faceIndex !== undefined) {
+                        const faceEntry = findFaceByTriangleIndex(displayMap.faces, intersect.faceIndex);
+                        if (faceEntry) {
+                            // 高亮所選 mesh（TODO：依 triangle_range 做真正的逐面高亮）
+                            highlightMesh(intersect.object, { transparent: true, opacity: 0.85 });
+                            // 通知主程式
+                            window.opencadNotify({
+                                type: 'face_selected',
+                                brep_face_ref: faceEntry.brep_face_ref,
+                                source_feature_id: faceEntry.source_feature_id,
+                                mesh_revision: currentMeshRevision,
+                            });
+                            document.getElementById('highlight-indicator').textContent =
+                                `已選取面: ${faceEntry.surface_type} (${faceEntry.source_feature_id})`;
+                            document.getElementById('highlight-indicator').style.display = 'block';
+                            break;
+                        }
                     }
-                    highlightedMesh = intersect.object;
-                    originalMaterial = intersect.object.material.clone();
-                    intersect.object.material = new THREE.MeshStandardMaterial({
-                        color: 0xf9e2af,
-                        metalness: 0.3,
-                        roughness: 0.4,
-                    });
-                    // 通知主程式
+                    // fallback：無 display_map 時沿用舊行為
+                    highlightMesh(intersect.object);
                     window.opencadNotify({
                         type: 'selection',
                         object: intersect.object.name || 'unknown',
@@ -300,12 +420,34 @@
             }
         });
 
+        /// 由三角面索引（faceIndex）在 display_map 中查詢所屬面。
+        /// triangle_range = [start, end)，使用二分搜尋。
+        function findFaceByTriangleIndex(faces, triIdx) {
+            if (!faces || faces.length === 0) return null;
+            let lo = 0, hi = faces.length - 1;
+            while (lo <= hi) {
+                const mid = (lo + hi) >> 1;
+                const range = faces[mid].triangle_range;
+                if (!range || range.length < 2) { lo = mid + 1; continue; }
+                if (triIdx < range[0]) { hi = mid - 1; }
+                else if (triIdx >= range[1]) { lo = mid + 1; }
+                else { return faces[mid]; }
+            }
+            return null;
+        }
+
         // ─── 模型載入 ───
         const loader = new GLTFLoader();
         let currentModel = null;
 
-        window.loadModel = function(url) {
+        window.loadModel = function(url, keepMap) {
             document.getElementById('loading').style.display = 'block';
+            // 未帶 map 的載入使既有 display_map 失效——
+            // 否則舊 map 會被用來解析新 mesh 的 faceIndex，選到錯的面
+            if (!keepMap) {
+                displayMap = null;
+                currentMeshRevision = 0;
+            }
             // 清除舊模型
             if (currentModel) {
                 scene.remove(currentModel);
@@ -357,6 +499,27 @@
                 console.error('GLB 載入失敗:', error);
                 window.opencadNotify({ type: 'error', message: String(error) });
             });
+        };
+
+        // ── loadModelWithMap：載入 GLB 後同時載入 display_map ──
+        window.loadModelWithMap = function(glbUrl, mapUrl) {
+            // 先載入 display_map
+            fetch(mapUrl)
+                .then(r => {
+                    if (!r.ok) throw new Error('display_map HTTP ' + r.status);
+                    return r.json();
+                })
+                .then(data => {
+                    displayMap = data;
+                    currentMeshRevision = data.mesh_revision || 0;
+                    // 再載入 GLB（keepMap=true：map 與此 GLB 來自同一次載入）
+                    window.loadModel(glbUrl, true);
+                })
+                .catch(err => {
+                    console.warn('display_map 載入失敗，使用 fallback picking:', err);
+                    displayMap = null;
+                    window.loadModel(glbUrl);
+                });
         };
 
         // ─── 視角控制 API ───
@@ -495,6 +658,8 @@
             sketchEntities = entities ? (Array.isArray(entities) ? entities : JSON.parse(entities)) : [];
             sketchSelectedIndex = -1;
             sketchTool = 'select';
+            sketchConstraints = [];
+            showConstraintBar();
 
             // Parse plane (default XY = Top)
             var planeObj = (plane && typeof plane === 'object') ? plane : (plane ? JSON.parse(plane) : {});
@@ -596,6 +761,8 @@
             if (!sketchMode) return;
             sketchMode = false;
             sketchPlaneBase = 'XY';
+            sketchConstraints = [];
+            hideConstraintBar();
 
             // Restore camera
             if (savedCamera) {
@@ -1071,6 +1238,7 @@
                 type: 'sketch_committed',
                 feature_id: sketchFeatureId,
                 entities: sketchEntities,
+                constraints: sketchConstraints,
             });
             exitSketchMode();
         };
@@ -1078,6 +1246,239 @@
         window.sketchCancel = function() {
             window.opencadNotify({ type: 'sketch_cancelled' });
             exitSketchMode();
+        };
+
+        // ═══════════════════════════════════════════
+        // ─── WP1-2: Constraint Solver UI ───
+        // ═══════════════════════════════════════════
+
+        let sketchConstraints = [];
+        let dragState = null;  // {entityIdx, startPoint, throttleTimer}
+        const SOLVE_THROTTLE_MS = 50;
+
+        // Show/hide constraint status bar when entering/leaving sketch mode
+        function showConstraintBar() {
+            document.getElementById('constraint-status').style.display = 'flex';
+        }
+        function hideConstraintBar() {
+            document.getElementById('constraint-status').style.display = 'none';
+        }
+
+        // ── Add Constraint ──
+        window.addConstraint = function(type) {
+            if (sketchSelectedIndex < 0 && type !== 'horizontal' && type !== 'vertical') {
+                alert('請先選取實體再加約束');
+                return;
+            }
+
+            var constraintId = 'c' + (sketchConstraints.length + 1);
+            var targets = [];
+            var value_mm = null;
+            var value_deg = null;
+            var name = '';
+
+            // Get entity ID from selected entity
+            function getEid(idx) {
+                var e = sketchEntities[idx];
+                return e.id || ('e' + (idx + 1));
+            }
+
+            if (type === 'horizontal' || type === 'vertical') {
+                // Apply to selected line entity
+                if (sketchSelectedIndex < 0) {
+                    alert('請先選取線段');
+                    return;
+                }
+                targets = [getEid(sketchSelectedIndex)];
+            } else if (type === 'coincident' || type === 'concentric' || type === 'distance' || type === 'equal' || type === 'parallel' || type === 'perpendicular' || type === 'midpoint' || type === 'symmetric' || type === 'tangent') {
+                // Need 2 selected entities — for now use selected + previous
+                if (sketchSelectedIndex < 0) {
+                    alert('請先選取實體');
+                    return;
+                }
+                targets = [getEid(sketchSelectedIndex)];
+                // Try to find a second selected entity — simplified: use first entity
+                if (sketchEntities.length > 1) {
+                    var secondIdx = sketchSelectedIndex === 0 ? 1 : sketchSelectedIndex - 1;
+                    targets.push(getEid(secondIdx));
+                }
+            } else if (type === 'radius' || type === 'diameter') {
+                if (sketchSelectedIndex < 0) {
+                    alert('請先選取圓/弧');
+                    return;
+                }
+                targets = [getEid(sketchSelectedIndex)];
+                var e = sketchEntities[sketchSelectedIndex];
+                var params = e.parameters || e;
+                var currentR = params.radius || params.r || 5;
+                value_mm = type === 'diameter' ? currentR * 2 : currentR;
+                name = type === 'diameter' ? '⌀' : 'R';
+            } else if (type === 'angle') {
+                if (sketchSelectedIndex < 0) return;
+                targets = [getEid(sketchSelectedIndex)];
+                value_deg = 90;
+            }
+
+            // For distance, prompt for value
+            if (type === 'distance') {
+                var val = prompt('距離值 (mm):', '60');
+                if (val === null) return;
+                value_mm = parseFloat(val);
+                name = 'd' + (sketchConstraints.filter(c => c.type === 'distance').length + 1);
+            } else if (type === 'radius') {
+                var val = prompt('半徑值 (mm):', String(value_mm));
+                if (val === null) return;
+                value_mm = parseFloat(val);
+                name = 'R' + value_mm;
+            } else if (type === 'diameter') {
+                var val = prompt('直徑值 (mm):', String(value_mm));
+                if (val === null) return;
+                value_mm = parseFloat(val);
+                name = '⌀' + value_mm;
+            }
+
+            var constraint = {
+                id: constraintId,
+                type: type,
+                targets: targets,
+                name: name,
+            };
+            if (value_mm !== null) constraint.value_mm = value_mm;
+            if (value_deg !== null) constraint.value_deg = value_deg;
+
+            sketchConstraints.push(constraint);
+            callSolver();
+        };
+
+        // ── Delete Constraint (click conflict item) ──
+        window.deleteConstraint = function(cid) {
+            sketchConstraints = sketchConstraints.filter(c => c.id !== cid);
+            callSolver();
+        };
+
+        // ── Call Solver (interactive, not persisted) ──
+        function callSolver() {
+            // Notify host to call solve endpoint
+            window.opencadNotify({
+                type: 'sketch_solve',
+                feature_id: sketchFeatureId,
+                entities: sketchEntities,
+                constraints: sketchConstraints,
+            });
+        }
+
+        // ── Receive solver result from host ──
+        window.opencadSolverResult = function(result) {
+            if (!result) return;
+            // 防禦：host 若誤傳 JSON 字串（雙重序列化）也能解析
+            if (typeof result === 'string') {
+                try { result = JSON.parse(result); } catch (e) { return; }
+            }
+            // Update entities with solved coordinates
+            if (result.entities) {
+                sketchEntities = result.entities;
+                renderSketchEntities();
+            }
+            // Update DOF status
+            if (result.solver_status) {
+                updateDofStatus(result.solver_status);
+            }
+        };
+
+        // ── Update DOF Status Bar ──
+        function updateDofStatus(status) {
+            var dofText = document.getElementById('dof-text');
+            var conflictList = document.getElementById('conflict-list');
+
+            if (status.state === 'full') {
+                dofText.textContent = '自由度：0／完全定義';
+                dofText.className = 'dof-full';
+                conflictList.innerHTML = '';
+            } else if (status.state === 'under') {
+                dofText.textContent = '自由度：' + status.dof + '／未完全定義';
+                dofText.className = 'dof-under';
+                conflictList.innerHTML = '';
+            } else if (status.state === 'over') {
+                dofText.textContent = '自由度：過約束！';
+                dofText.className = 'dof-over';
+                // Show conflict constraints as clickable items
+                var html = '';
+                (status.conflicts || []).forEach(function(cid) {
+                    html += '<span class="conflict-item" onclick="deleteConstraint(\'' + cid + '\')">衝突: ' + cid + ' ✗</span>';
+                });
+                conflictList.innerHTML = html;
+            }
+        }
+
+        // ── Drag Interaction ──
+        renderer.domElement.addEventListener('mousedown', function(event) {
+            if (!sketchMode || sketchTool !== 'select') return;
+            if (sketchSelectedIndex < 0) return;
+
+            var e = sketchEntities[sketchSelectedIndex];
+            if (!e) return;
+
+            dragState = {
+                entityIdx: sketchSelectedIndex,
+                startX: event.clientX,
+                startY: event.clientY,
+                throttleTimer: null,
+            };
+        });
+
+        renderer.domElement.addEventListener('mousemove', function(event) {
+            if (!dragState) return;
+
+            // Throttle solver calls
+            if (dragState.throttleTimer) return;
+            dragState.throttleTimer = setTimeout(function() {
+                dragState.throttleTimer = null;
+                // Calculate drag delta in sketch plane
+                var dx = (event.clientX - dragState.startX) * 0.1;  // scale to mm
+                var dy = -(event.clientY - dragState.startY) * 0.1;  // invert Y
+
+                // Update entity position based on drag
+                var e = sketchEntities[dragState.entityIdx];
+                if (e) {
+                    var params = e.parameters || e;
+                    if (params.center_x !== undefined || params.x !== undefined) {
+                        params.center_x = (params.center_x || 0) + dx;
+                        params.center_y = (params.center_y || 0) + dy;
+                        params.x = params.center_x;
+                        params.y = params.center_y;
+                    } else if (params.x1 !== undefined) {
+                        params.x1 = (params.x1 || 0) + dx;
+                        params.y1 = (params.y1 || 0) + dy;
+                        params.x2 = (params.x2 || 0) + dx;
+                        params.y2 = (params.y2 || 0) + dy;
+                    }
+                    // Reset start for continuous drag
+                    dragState.startX = event.clientX;
+                    dragState.startY = event.clientY;
+                    // Call solver with updated entities
+                    callSolver();
+                }
+            }, SOLVE_THROTTLE_MS);
+        });
+
+        renderer.domElement.addEventListener('mouseup', function() {
+            if (dragState && dragState.throttleTimer) {
+                clearTimeout(dragState.throttleTimer);
+            }
+            dragState = null;
+        });
+
+        // ── Dimension Label Click → Edit ──
+        // Dimension labels are created in renderSketchEntities; clicking one opens edit
+        window.editDimension = function(entityIdx, paramKey) {
+            var e = sketchEntities[entityIdx];
+            if (!e) return;
+            var params = e.parameters || e;
+            var currentVal = params[paramKey] || 0;
+            var newVal = prompt(paramKey + ' 值 (mm):', String(currentVal));
+            if (newVal === null) return;
+            params[paramKey] = parseFloat(newVal);
+            callSolver();
         };
 
         // ─── 動畫迴圈 ───
@@ -1162,6 +1563,122 @@
         window.highlightDatumPlane = function(name) {
             datumSelectedName = name || null;
             updateDatumVisibility();
+        };
+
+        // ═══ WP1-4: Property Manager / 量測 / 選取 / 顯示模式 ═══
+
+        // WP1-4: 選取過濾器
+        let selectionFilter = 'all';  // all, face, edge, vertex
+        window.setSelectionFilter = function(filter) {
+            selectionFilter = filter;
+            console.log('Selection filter:', filter);
+        };
+
+        // WP1-4: 顯示模式
+        let currentDisplayMode = 'shaded';
+        let edgeOverlayGroup = new THREE.Group();
+        window.setDisplayMode = function(mode) {
+            currentDisplayMode = mode;
+            if (!modelGroup) return;
+            // Remove existing edge overlay
+            if (edgeOverlayGroup) {
+                scene.remove(edgeOverlayGroup);
+                edgeOverlayGroup = new THREE.Group();
+            }
+            modelGroup.traverse(function(obj) {
+                if (obj.isMesh && obj.material) {
+                    switch (mode) {
+                        case 'shaded':
+                            obj.material.wireframe = false;
+                            obj.material.transparent = false;
+                            obj.material.opacity = 1.0;
+                            break;
+                        case 'shaded-with-edges':
+                            obj.material.wireframe = false;
+                            obj.material.transparent = false;
+                            obj.material.opacity = 1.0;
+                            // Render edge overlay from display_map（schema 欄位名為 polyline）
+                            if (displayMap && displayMap.edges && displayMap.edges.length > 0) {
+                                displayMap.edges.forEach(function(edge) {
+                                    if (edge.polyline && edge.polyline.length >= 2) {
+                                        var pts = edge.polyline.map(function(v) {
+                                            return new THREE.Vector3(v[0], v[1], v[2]);
+                                        });
+                                        var edgeGeom = new THREE.BufferGeometry().setFromPoints(pts);
+                                        var edgeLine = new THREE.Line(edgeGeom, new THREE.LineBasicMaterial({
+                                            color: 0x333333, linewidth: 1
+                                        }));
+                                        edgeOverlayGroup.add(edgeLine);
+                                    }
+                                });
+                                // polyline 座標是模型空間——套用與 currentModel 相同的縮放/位移才會貼齊
+                                if (currentModel) {
+                                    edgeOverlayGroup.position.copy(currentModel.position);
+                                    edgeOverlayGroup.quaternion.copy(currentModel.quaternion);
+                                    edgeOverlayGroup.scale.copy(currentModel.scale);
+                                }
+                                scene.add(edgeOverlayGroup);
+                            }
+                            break;
+                        case 'wireframe':
+                            obj.material.wireframe = true;
+                            obj.material.transparent = false;
+                            obj.material.opacity = 1.0;
+                            break;
+                        case 'transparent':
+                            obj.material.wireframe = false;
+                            obj.material.transparent = true;
+                            obj.material.opacity = 0.3;
+                            break;
+                    }
+                    obj.material.needsUpdate = true;
+                }
+            });
+        };
+
+        // WP1-4: 量測模式
+        let measureMode = false;
+        let measurePoints = [];
+        let measureLabels = [];
+        window.enterMeasureMode = function() {
+            measureMode = true;
+            measurePoints = [];
+            console.log('Entered measure mode');
+        };
+        window.exitMeasureMode = function() {
+            measureMode = false;
+            measurePoints = [];
+            // Clear measure labels
+            measureLabels.forEach(function(l) { scene.remove(l); });
+            measureLabels = [];
+            console.log('Exited measure mode');
+        };
+
+        // WP1-4: 隔離/隱藏/顯示特徵
+        window.isolateFeature = function(featureId) {
+            if (!modelGroup) return;
+            modelGroup.traverse(function(obj) {
+                if (obj.isMesh) {
+                    obj.visible = (obj.userData && obj.userData.featureId === featureId);
+                }
+            });
+        };
+        window.hideFeature = function(featureId) {
+            if (!modelGroup) return;
+            modelGroup.traverse(function(obj) {
+                if (obj.isMesh && obj.userData && obj.userData.featureId === featureId) {
+                    obj.visible = false;
+                }
+            });
+        };
+        window.showAllFeatures = function() {
+            if (!modelGroup) return;
+            modelGroup.traverse(function(obj) {
+                if (obj.isMesh) obj.visible = true;
+            });
+        };
+        window.clearIsolate = function() {
+            window.showAllFeatures();
         };
 
         window.onToggleDatumPlanes = function() {

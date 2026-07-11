@@ -31,6 +31,11 @@ public interface ILlmProvider
     /// 根據重建錯誤碼與引擎訊息，產生修正命令（Repair Agent）。
     /// </summary>
     Task<CadCommand> RepairCommandAsync(string errorCode, string engineMessage, string featureGraphJson);
+
+    /// <summary>
+    /// WP-H1: 取得 Capability payload——引擎能力資訊供 LLM context。
+    /// </summary>
+    Task<CapabilityPayload> GetCapabilityPayloadAsync();
 }
 
 /// <summary>
@@ -66,6 +71,18 @@ public class ReviewResult
 }
 
 /// <summary>
+/// WP-H1 Capability payload——每次 LLM context 必帶的引擎能力資訊。
+/// </summary>
+public class CapabilityPayload
+{
+    public string SchemaVersion { get; set; } = "1.0";
+    public string EngineVersion { get; set; } = "opencad-worker-1.0";
+    public string FeatureCatalogJson { get; set; } = "[]";
+    public List<string> UnsupportedFeatures { get; set; } = new();
+    public List<string> Tools { get; set; } = new();
+}
+
+/// <summary>
 /// CAD Worker 介面——與 Python 幾何引擎的通訊合約。
 /// </summary>
 public interface ICadWorker
@@ -79,14 +96,27 @@ public interface ICadWorker
     /// <summary>重建模型。</summary>
     Task<RebuildResult> RebuildAsync(string projectId);
 
+    /// <summary>
+    /// Dry-run 重建（WP-H1 rebuild_staging）——只試跑不 commit。
+    /// </summary>
+    Task<RebuildResult> RebuildStagingAsync(string projectId);
+
+    /// <summary>
+    /// 取得 Capability payload（WP-H1）——引擎能力資訊供 LLM context。
+    /// </summary>
+    Task<string?> GetCapabilityAsync();
+
     /// <summary>驗證模型。</summary>
     Task<ValidationReport> ValidateAsync(string projectId);
 
     /// <summary>匯出模型。</summary>
     Task<string> ExportAsync(string projectId, string format);
 
-    /// <summary>取得 GLB 預覽的 URL。</summary>
-    string GetPreviewUrl(string projectId);
+    /// <summary>取得 GLB 預覽的 URL（WP-H2：內含短時效預簽 token，單次有效）。</summary>
+    Task<string> GetPreviewUrlAsync(string projectId);
+
+    /// <summary>取得 display_map 的 URL（面/邊拓撲對應表，供 viewer picking；預簽 token 單次有效）。</summary>
+    Task<string> GetDisplayMapUrlAsync(string projectId);
 
     /// <summary>健康檢查。</summary>
     Task<bool> CheckHealthAsync();
@@ -114,6 +144,27 @@ public interface ICadWorker
     /// 原子性清除所有特徵（Clear All）——單一交易，一個 undo 步驟。
     /// </summary>
     Task<bool> ResetProjectAsync(string projectId);
+
+    /// <summary>
+    /// 求解草圖約束（WP1-2，互動式，不進入歷史）。
+    /// 回傳 {entities, solver_status} JSON 字串。
+    /// </summary>
+    Task<string?> SolveSketchAsync(string projectId, string featureId, List<Dictionary<string, object>> entities, List<Dictionary<string, object>> constraints);
+
+    /// <summary>
+    /// 建立基準幾何（WP1-3）。回傳更新後的 reference_geometry JSON 字串。
+    /// </summary>
+    Task<string?> CreateReferenceGeometryAsync(string projectId, string id, string name, string kind, Dictionary<string, object> definition);
+
+    /// <summary>
+    /// 刪除基準幾何（WP1-3）。
+    /// </summary>
+    Task<bool> DeleteReferenceGeometryAsync(string projectId, string rgId);
+
+    /// <summary>
+    /// 列出基準幾何（WP1-3）。回傳 reference_geometry JSON 陣列字串。
+    /// </summary>
+    Task<string?> ListReferenceGeometryAsync(string projectId);
 }
 
 public class CommandResult
@@ -129,6 +180,7 @@ public class RebuildResult
 {
     public string Status { get; set; } = string.Empty;
     public int FeatureCount { get; set; }
+    public int MeshRevision { get; set; }
     public string? ErrorCode { get; set; }
     public string? EngineMessage { get; set; }
     public MassProperties? MassProperties { get; set; }

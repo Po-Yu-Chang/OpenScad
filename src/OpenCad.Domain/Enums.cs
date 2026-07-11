@@ -34,6 +34,12 @@ public enum FeatureType
     BooleanUnion,
     BooleanDifference,
     BooleanIntersection,
+    Draft,
+    Rib,
+    Thin,
+    VariableFillet,
+    Countersink,
+    CosmeticThread,
 }
 
 /// <summary>
@@ -57,4 +63,16 @@ public enum FeatureSource
     Llm,
     User,
     Imported,
+}
+
+/// <summary>
+/// 特徵狀態機（v2）。
+/// </summary>
+[JsonConverter(typeof(SnakeCaseEnumConverter))]
+public enum FeatureState
+{
+    Active,
+    Suppressed,
+    Failed,
+    Orphan,
 }

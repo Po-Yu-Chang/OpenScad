@@ -17,6 +17,9 @@ public static class ErrorCodes
     public const string InvalidBrep = "INVALID_BREP";
     public const string InvalidStandardPart = "INVALID_STANDARD_PART";
     public const string SketchNotClosed = "SKETCH_NOT_CLOSED";
+    public const string ReferenceLost = "REFERENCE_LOST";
+    public const string ReferenceAmbiguous = "REFERENCE_AMBIGUOUS";
+    public const string ReorderDependencyViolation = "REORDER_DEPENDENCY_VIOLATION";
     public const string TransportError = "TRANSPORT_ERROR";
 }
 
@@ -46,6 +49,9 @@ public class StructuredError
         ErrorCodes.InvalidBrep => "check_geometry_integrity",
         ErrorCodes.InvalidStandardPart => "verify_standard_exists_in_lookup_table",
         ErrorCodes.SketchNotClosed => "ensure_profile_is_closed",
+        ErrorCodes.ReferenceLost => "reference_disappeared_rerun_or_reselect",
+        ErrorCodes.ReferenceAmbiguous => "disambiguate_reference_add_centroid_hint",
+        ErrorCodes.ReorderDependencyViolation => "reorder_after_upstream_dependencies",
         ErrorCodes.TransportError => "check_worker_process_and_connection",
         _ => "review_error_details",
     };

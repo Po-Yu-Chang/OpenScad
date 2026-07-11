@@ -78,3 +78,6 @@ desktop.ini
 .env
 secrets.json
 appsettings.Local.json
+
+## FreeCAD 本機安裝（WP0-1 spike 用，2.3GB 不進 repo）
+FreeCAD/

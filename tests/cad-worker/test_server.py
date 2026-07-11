@@ -31,11 +31,11 @@ class TestAuthSecurity:
     def test_invalid_token_rejected(self, client):
         resp = client.post("/api/projects", json={"name": "Test"},
                           headers={"X-Session-Token": "wrong-token"})
-        assert resp.status_code == 403
+        assert resp.status_code == 401
 
     def test_missing_token_rejected(self, client):
         resp = client.post("/api/projects", json={"name": "Test"})
-        assert resp.status_code == 403
+        assert resp.status_code == 401
 
 
 class TestCreateProject:
@@ -48,21 +48,33 @@ class TestCreateProject:
 
 
 class TestPreviewToken:
-    """preview.glb 必須支援 ?token= query param（WebView GLTFLoader 無法帶自訂 header）。"""
+    """preview.glb 的 query token 走預簽流程（WebView GLTFLoader 無法帶自訂 header）。
+
+    WP-H2 契約：URL 中只接受 /api/presign 發出的短時效預簽 token；
+    靜態 SESSION_TOKEN 放在 URL 一律 401（test_wp_h2_security 也驗證此點）。
+    """
 
     def test_preview_with_valid_query_token(self, client, auth_headers):
         # 先建立專案
         resp = client.post("/api/projects", json={"name": "Test"}, headers=auth_headers)
         pid = resp.json()["project_id"]
-        # 用 query token 嘗試取得 preview（檔案可能不存在，但應該不是 403）
+        # 取得預簽 token 後用 query 帶入——認證必須通過（404=檔案未生成，非認證失敗）
+        presigned = client.post("/api/presign", headers=auth_headers).json()["presigned_token"]
+        resp = client.get(f"/api/projects/{pid}/preview.glb?token={presigned}")
+        assert resp.status_code in (200, 404)
+
+    def test_preview_with_static_session_token_in_url_rejected(self, client, auth_headers):
+        """靜態 SESSION_TOKEN 不得放 URL——必須 401（token 不寫入 log/URL）。"""
+        resp = client.post("/api/projects", json={"name": "Test"}, headers=auth_headers)
+        pid = resp.json()["project_id"]
         resp = client.get(f"/api/projects/{pid}/preview.glb?token={SESSION_TOKEN}")
-        assert resp.status_code != 403  # 不是認證失敗
+        assert resp.status_code == 401
 
     def test_preview_with_invalid_query_token(self, client, auth_headers):
         resp = client.post("/api/projects", json={"name": "Test"}, headers=auth_headers)
         pid = resp.json()["project_id"]
         resp = client.get(f"/api/projects/{pid}/preview.glb?token=wrong-token")
-        assert resp.status_code == 403
+        assert resp.status_code == 401
 
     def test_preview_with_valid_header_token(self, client, auth_headers):
         resp = client.post("/api/projects", json={"name": "Test"}, headers=auth_headers)
@@ -74,7 +86,7 @@ class TestPreviewToken:
         resp = client.post("/api/projects", json={"name": "Test"}, headers=auth_headers)
         pid = resp.json()["project_id"]
         resp = client.get(f"/api/projects/{pid}/preview.glb")
-        assert resp.status_code == 403
+        assert resp.status_code == 401
 
 
 class TestApplyPlanTransaction:

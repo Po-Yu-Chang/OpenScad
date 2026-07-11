@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://opencad.dev/schemas/display_map.schema.json",
+  "title": "OpenCad Display Topology Map",
+  "description": "display_map.json——GLB 三角形與 BREP 拓撲（面/邊）的對應表，供 viewer 精確 picking 使用。由 Worker 在 rebuild 時與 GLB 同一段程式碼產生，確保三角形順序一致。",
+  "type": "object",
+  "required": ["mesh_revision", "faces", "edges"],
+  "properties": {
+    "mesh_revision": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "與對應 preview.glb 同步的修訂版號；rebuild 完成時遞增。viewer 據此判斷 map 是否過期。"
+    },
+    "faces": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/face_entry" }
+    },
+    "edges": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/edge_entry" }
+    }
+  },
+  "definitions": {
+    "face_entry": {
+      "type": "object",
+      "required": ["face_id", "brep_face_ref", "source_feature_id", "surface_type", "triangle_range", "area_mm2", "centroid"],
+      "properties": {
+        "face_id": {
+          "type": "string",
+          "description": "display_map 內部的面識別碼，如 f-0, f-1。"
+        },
+        "brep_face_ref": {
+          "type": "string",
+          "description": "BREP 拓撲參照，格式 feature_id/result/face/N。供 WP0-4 語意查詢與 persistent reference 使用。"
+        },
+        "source_feature_id": {
+          "type": "string",
+          "description": "產生此面的特徵 ID（來自 TopologyTrace 的 feature→face provenance）。"
+        },
+        "surface_type": {
+          "type": "string",
+          "enum": ["plane", "cylinder", "cone", "sphere", "torus", "other"],
+          "description": "BREP 面的曲面類型，供語意查詢的 surface_type filter 使用。"
+        },
+        "triangle_range": {
+          "type": "array",
+          "items": { "type": "integer" },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "[start, end] 三角形索引範圍（含頭不含尾），與 GLB 三角形順序一致。相鄰面不重疊。"
+        },
+        "area_mm2": {
+          "type": "number",
+          "description": "面的面積（mm²）。"
+        },
+        "centroid": {
+          "type": "array",
+          "items": { "type": "number" },
+          "minItems": 3,
+          "maxItems": 3,
+          "description": "面的質心座標 [x, y, z]（mm）。"
+        }
+      }
+    },
+    "edge_entry": {
+      "type": "object",
+      "required": ["display_edge_id", "brep_edge_ref", "source_feature_id", "polyline"],
+      "properties": {
+        "display_edge_id": {
+          "type": "string",
+          "description": "display_map 內部的邊識別碼，如 e-0, e-1。"
+        },
+        "brep_edge_ref": {
+          "type": "string",
+          "description": "BREP 拓撲參照，格式 feature_id/result/edge/N。"
+        },
+        "source_feature_id": {
+          "type": "string",
+          "description": "產生此邊的特徵 ID。"
+        },
+        "polyline": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": { "type": "number" },
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "description": "離散化的折線座標 [[x,y,z], ...]，弦高容差 0.1mm。"
+        }
+      }
+    }
+  }
+}

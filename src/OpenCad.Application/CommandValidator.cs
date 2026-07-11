@@ -34,6 +34,21 @@ public static class CommandValidator
                 if (string.IsNullOrWhiteSpace(command.TargetFeatureId))
                     errors.Add($"{command.Action} 需要 target_feature_id");
                 break;
+            case "suppress_feature":
+            case "unsuppress_feature":
+                if (string.IsNullOrWhiteSpace(command.TargetFeatureId))
+                    errors.Add($"{command.Action} 需要 target_feature_id");
+                break;
+            case "reorder_feature":
+                if (string.IsNullOrWhiteSpace(command.TargetFeatureId))
+                    errors.Add("reorder_feature 需要 target_feature_id");
+                if (command.Parameters == null || !command.Parameters.ContainsKey("new_order"))
+                    errors.Add("reorder_feature 需要 parameters.new_order");
+                break;
+            case "set_rollback":
+                if (command.Parameters == null || !command.Parameters.ContainsKey("rollback_position"))
+                    errors.Add("set_rollback 需要 parameters.rollback_position（null 或整數）");
+                break;
             case "rebuild":
             case "validate":
             case "export":

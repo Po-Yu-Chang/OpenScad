@@ -191,14 +191,29 @@ public partial class MainWindow : Window
                             break;
                         case ViewerBridge.MessageType.SketchCommitted:
                             if (msg.FeatureId != null && msg.EntitiesJson != null)
-                                _ = vm.CommitSketchAsync(msg.FeatureId, msg.EntitiesJson);
+                                _ = vm.CommitSketchAsync(msg.FeatureId, msg.EntitiesJson, msg.ConstraintsJson);
                             break;
                         case ViewerBridge.MessageType.SketchCancelled:
                             vm.CancelSketch();
                             break;
+                        case ViewerBridge.MessageType.SketchSolve:
+                            if (msg.FeatureId != null && msg.EntitiesJson != null)
+                                _ = vm.SolveSketchAsync(msg.FeatureId, msg.EntitiesJson, msg.ConstraintsJson);
+                            break;
                         case ViewerBridge.MessageType.DatumPlaneClicked:
                             if (msg.DatumPlaneName != null)
                                 vm.SelectDatumPlane(msg.DatumPlaneName);
+                            break;
+                        case ViewerBridge.MessageType.FaceSelected:
+                            if (msg.SourceFeatureId != null)
+                                vm.SelectFeatureById(msg.SourceFeatureId);
+                            break;
+                        case ViewerBridge.MessageType.MeasurementResult:
+                            vm.AddMeasurement(
+                                msg.MeasurementType ?? "distance",
+                                msg.MeasurementValue,
+                                msg.MeasurementUnit ?? "mm",
+                                msg.MeasurementDescription ?? "");
                             break;
                     }
                 }

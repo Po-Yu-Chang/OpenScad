@@ -240,4 +240,71 @@ public class CommandValidatorTests
         var errors = CommandValidator.Validate(cmd);
         Assert.Empty(errors);
     }
+
+    // ── v2 command tests ──
+
+    [Fact]
+    public void Validate_SuppressFeature_NoTarget_ReturnsError()
+    {
+        var cmd = new CadCommand { Action = "suppress_feature" };
+        var errors = CommandValidator.Validate(cmd);
+        Assert.Contains(errors, e => e.Contains("target_feature_id"));
+    }
+
+    [Fact]
+    public void Validate_SuppressFeature_WithTarget_Passes()
+    {
+        var cmd = new CadCommand { Action = "suppress_feature", TargetFeatureId = "pad1" };
+        var errors = CommandValidator.Validate(cmd);
+        Assert.Empty(errors);
+    }
+
+    [Fact]
+    public void Validate_UnsuppressFeature_NoTarget_ReturnsError()
+    {
+        var cmd = new CadCommand { Action = "unsuppress_feature" };
+        var errors = CommandValidator.Validate(cmd);
+        Assert.Contains(errors, e => e.Contains("target_feature_id"));
+    }
+
+    [Fact]
+    public void Validate_ReorderFeature_NoNewOrder_ReturnsError()
+    {
+        var cmd = new CadCommand { Action = "reorder_feature", TargetFeatureId = "pad1" };
+        var errors = CommandValidator.Validate(cmd);
+        Assert.Contains(errors, e => e.Contains("new_order"));
+    }
+
+    [Fact]
+    public void Validate_ReorderFeature_WithNewOrder_Passes()
+    {
+        var cmd = new CadCommand
+        {
+            Action = "reorder_feature",
+            TargetFeatureId = "pad1",
+            Parameters = new() { ["new_order"] = 2 },
+        };
+        var errors = CommandValidator.Validate(cmd);
+        Assert.Empty(errors);
+    }
+
+    [Fact]
+    public void Validate_SetRollback_NoPosition_ReturnsError()
+    {
+        var cmd = new CadCommand { Action = "set_rollback" };
+        var errors = CommandValidator.Validate(cmd);
+        Assert.Contains(errors, e => e.Contains("rollback_position"));
+    }
+
+    [Fact]
+    public void Validate_SetRollback_WithNullPosition_Passes()
+    {
+        var cmd = new CadCommand
+        {
+            Action = "set_rollback",
+            Parameters = new() { ["rollback_position"] = null! },
+        };
+        var errors = CommandValidator.Validate(cmd);
+        Assert.Empty(errors);
+    }
 }

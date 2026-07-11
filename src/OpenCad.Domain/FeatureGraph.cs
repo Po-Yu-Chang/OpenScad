@@ -56,6 +56,18 @@ public class Feature
 
     [JsonPropertyName("error_message")]
     public string ErrorMessage { get; set; } = string.Empty;
+
+    // v2 fields
+
+    [JsonPropertyName("body")]
+    public string Body { get; set; } = "body1";
+
+    [JsonPropertyName("order")]
+    public int? Order { get; set; }
+
+    [JsonPropertyName("state")]
+    [JsonConverter(typeof(SnakeCaseEnumConverter))]
+    public FeatureState State { get; set; } = FeatureState.Active;
 }
 
 /// <summary>
@@ -66,6 +78,26 @@ public class FeatureGraph
 {
     [JsonPropertyName("features")]
     public Dictionary<string, Feature> Features { get; set; } = new();
+
+    // v2 document model fields
+
+    [JsonPropertyName("bodies")]
+    public List<BodyDefinition> Bodies { get; set; } = new() { new BodyDefinition { Id = "body1", Name = "主體" } };
+
+    [JsonPropertyName("reference_geometry")]
+    public List<ReferenceGeometryDefinition> ReferenceGeometry { get; set; } = new();
+
+    [JsonPropertyName("rollback_position")]
+    public int? RollbackPosition { get; set; }
+
+    [JsonPropertyName("global_variables")]
+    public List<GlobalVariable> GlobalVariables { get; set; } = new();
+
+    [JsonPropertyName("configurations")]
+    public List<ConfigurationDefinition> Configurations { get; set; } = new();
+
+    [JsonPropertyName("custom_properties")]
+    public Dictionary<string, object> CustomProperties { get; set; } = new();
 
     /// <summary>
     /// 拓撲排序，回傳特徵 ID 列表（上游在前）。
@@ -133,4 +165,70 @@ public class FeatureGraph
         Collect(featureId);
         return downstream;
     }
+}
+
+/// <summary>
+/// 實體定義（v2）。
+/// </summary>
+public class BodyDefinition
+{
+    [JsonPropertyName("id")]
+    public string Id { get; set; } = string.Empty;
+
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = string.Empty;
+
+    [JsonPropertyName("material")]
+    public string Material { get; set; } = string.Empty;
+
+    [JsonPropertyName("appearance")]
+    public string? Appearance { get; set; }
+}
+
+/// <summary>
+/// 基準幾何定義（v2，WP1-3 填充）。
+/// </summary>
+public class ReferenceGeometryDefinition
+{
+    [JsonPropertyName("id")]
+    public string Id { get; set; } = string.Empty;
+
+    [JsonPropertyName("type")]
+    public string Type { get; set; } = "plane"; // plane|axis|point|csys
+
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = string.Empty;
+
+    [JsonPropertyName("definition")]
+    public Dictionary<string, object>? Definition { get; set; }
+}
+
+/// <summary>
+/// 全域變數（v2，WP2-1 填充）。
+/// </summary>
+public class GlobalVariable
+{
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = string.Empty;
+
+    [JsonPropertyName("expression")]
+    public string Expression { get; set; } = string.Empty;
+
+    [JsonPropertyName("unit")]
+    public string Unit { get; set; } = "mm";
+}
+
+/// <summary>
+/// 組態定義（v2，WP2-2 填充）。
+/// </summary>
+public class ConfigurationDefinition
+{
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = string.Empty;
+
+    [JsonPropertyName("parent")]
+    public string? Parent { get; set; }
+
+    [JsonPropertyName("overrides")]
+    public Dictionary<string, object> Overrides { get; set; } = new();
 }
