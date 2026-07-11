@@ -285,6 +285,79 @@ class TestApplyPlanTransaction:
         feat_ids = [f["feature_id"] for f in proj_data["features"]["features"]]
         assert len(feat_ids) == 0
 
+    def test_apply_plan_step3_failure_no_history(self, client, auth_headers):
+        """TX-001: 4 步 plan 第 3 步（重建）失敗 → graph 不變且不產生 history event。"""
+        pid = self._create_project(client, auth_headers)
+        rev_before = len(
+            client.get(f"/api/projects/{pid}/revisions", headers=auth_headers).json()["revisions"]
+        )
+
+        commands = [
+            {
+                "action": "create_feature",
+                "feature": {
+                    "feature_id": "sk1",
+                    "type": "sketch",
+                    "name": "rect sketch",
+                    "parameters": {},
+                    "sketch_entities": [
+                        {"type": "rectangle", "width": 10, "height": 10, "center": [0, 0]},
+                    ],
+                    "plane": {"base": "XY", "offset": 0},
+                },
+            },
+            {
+                "action": "create_feature",
+                "feature": {
+                    "feature_id": "p1",
+                    "type": "pad",
+                    "name": "pad",
+                    "parameters": {"length": 5},
+                    "input": "sk1",
+                    "references": ["sk1"],
+                },
+            },
+            {
+                "action": "create_feature",
+                "feature": {
+                    "feature_id": "f1",
+                    "type": "fillet",
+                    "name": "bad fillet",
+                    "parameters": {"radius": 999, "edge_selector": "all"},
+                    "input": "p1",
+                    "references": ["p1"],
+                },
+            },
+            {
+                "action": "create_feature",
+                "feature": {
+                    "feature_id": "h1",
+                    "type": "hole",
+                    "name": "hole",
+                    "parameters": {"diameter": 3, "through_all": True},
+                    "input": "f1",
+                    "references": ["f1"],
+                },
+            },
+        ]
+        resp = client.post(
+            f"/api/projects/{pid}/apply_plan",
+            json={"commands": commands, "plan_label": "4-step, fails at step 3"},
+            headers=auth_headers,
+        )
+        assert resp.json()["status"] == "error"
+
+        # graph 完全不變——一個特徵都沒進
+        proj_data = client.get(f"/api/projects/{pid}", headers=auth_headers).json()
+        feat_ids = [f["feature_id"] for f in proj_data["features"]["features"]]
+        assert len(feat_ids) == 0
+
+        # 重點：失敗的 plan 不得產生 history event
+        rev_after = len(
+            client.get(f"/api/projects/{pid}/revisions", headers=auth_headers).json()["revisions"]
+        )
+        assert rev_after == rev_before
+
 
 class TestResetProject:
     """reset_project 端點：原子性清除所有特徵。"""

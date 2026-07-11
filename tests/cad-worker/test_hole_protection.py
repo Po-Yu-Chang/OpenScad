@@ -95,3 +95,28 @@ def test_cylinder_outer_edge_not_treated_as_hole():
     assert fillet_edges, "圓柱外緣（含 CIRCLE 邊）應可被圓角選中"
     # 孔建立的邊不得被選中
     assert hole_edges.isdisjoint(fillet_edges), "孔建立的邊不得被圓角選中"
+
+
+def test_box_with_hole_volume_precise():
+    """G-001: 10×5×5 方塊中心 Ø3 貫穿孔，體積精確 ≈ 214.657 mm³。"""
+    import math
+    features = [
+        _feat("sketch1", FeatureType.SKETCH, "base rect",
+              sketch_entities=[{"type": "rectangle", "width": 10, "height": 5}]),
+        _feat("pad1", FeatureType.PAD, "pad", input="sketch1",
+              parameters={"length": 5}),
+        _feat("hole1", FeatureType.HOLE, "center hole", input="pad1",
+              parameters={"diameter": 3, "through_all": True}),
+    ]
+    graph, result = _rebuild(features)
+
+    assert result.part is not None
+    bbox = result.part.bounding_box()
+    assert abs(bbox.size.X - 10) < 0.1
+    assert abs(bbox.size.Y - 5) < 0.1
+    assert abs(bbox.size.Z - 5) < 0.1
+
+    vol = result.part.volume
+    assert vol > 0
+    expected_vol = 250 - math.pi * 1.5**2 * 5  # ≈ 214.657
+    assert abs(vol - expected_vol) < 1.0
