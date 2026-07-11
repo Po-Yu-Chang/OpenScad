@@ -13,14 +13,10 @@ public interface ILlmProvider
     Task<DesignPlan> CreatePlanAsync(DesignContext context);
 
     /// <summary>
-    /// 將建模計畫轉成受控 JSON Command。
+    /// 根據使用者修改需求與目前特徵圖，產生一批依序執行的命令（可為多個），
+    /// 或在需求不明確時回傳 clarification 反問。
     /// </summary>
-    Task<CadCommand> CreateCommandAsync(DesignPlan plan);
-
-    /// <summary>
-    /// 根據使用者修改需求與目前特徵圖，產生 update_feature 命令。
-    /// </summary>
-    Task<CadCommand> CreateUpdateCommandAsync(string userRequest, string featureGraphJson, List<ChatTurn>? history = null);
+    Task<UpdateCommandBatch> CreateUpdateCommandAsync(string userRequest, string featureGraphJson, List<ChatTurn>? history = null);
 
     /// <summary>
     /// 讀取幾何檢查報告並提出修正建議。
@@ -57,6 +53,19 @@ public class ChatTurn
 {
     public string Role { get; set; } = string.Empty;
     public string Content { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// 修改流程回傳：一批依序執行的命令；或需求不明確時的反問。
+/// </summary>
+public class UpdateCommandBatch
+{
+    [System.Text.Json.Serialization.JsonPropertyName("commands")]
+    public List<CadCommand> Commands { get; set; } = new();
+
+    /// <summary>需求不明確時向使用者反問的一句話（此時 Commands 通常為空）。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("clarification")]
+    public string? Clarification { get; set; }
 }
 
 /// <summary>

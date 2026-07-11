@@ -37,6 +37,9 @@ public class MainViewModel : INotifyPropertyChanged
     private FeatureNode? _selectedFeature;
     private int _rebuildCount;
 
+    /// <summary>#2：目前尚未套用的提案卡（計畫／差異／批次）。收到新 prompt 時作廢它，避免殘留可點按鈕造成重複套用。</summary>
+    private ChatMessage? _pendingCard;
+
     public ObservableCollection<ChatMessage> Messages { get; } = new();
     public ObservableCollection<FeatureNode> FeatureTree { get; } = new();
     public ObservableCollection<ParameterItem> SelectedFeatureParameters { get; } = new();
@@ -1024,6 +1027,15 @@ public class MainViewModel : INotifyPropertyChanged
         AddHistory("user", request);
         InputText = string.Empty;
 
+        // #2：上一張提案卡若尚未套用，收到新 prompt 即作廢它——
+        // 否則舊卡片的「套用」按鈕仍可點，會造成重複套用或狀態錯亂。
+        if (_pendingCard is { IsActionable: true })
+        {
+            _pendingCard.IsActionable = false;
+            Messages.Add(ChatMessage.Assistant("（已略過上一個未套用的提案）"));
+        }
+        _pendingCard = null;
+
         // 輸入為專案 ID（GUID）時直接開啟該專案——配合「開啟專案」清單的操作方式
         if (Guid.TryParse(request.Trim(), out _))
         {
@@ -1089,6 +1101,7 @@ public class MainViewModel : INotifyPropertyChanged
                     Messages.Add(ChatMessage.Assistant("已取消建模計畫。"));
                 });
                 Messages.Add(planMsg);
+                _pendingCard = planMsg;
 
                 // 如果缺少資訊，提示使用者
                 if (plan.MissingInfo.Count > 0)
@@ -1204,10 +1217,23 @@ public class MainViewModel : INotifyPropertyChanged
             string? lastSketchId = null;
             string? lastFeatureId = null;
             var index = 0;
+            // P0：datum 產生的 id 依提示詞慣例編號（datum_plane_1…），供後續 sketch 的 plane.base=""datum:…"" 對上
+            var datumCounts = new Dictionary<string, int>();
 
             foreach (var step in plan.Steps)
             {
                 index++;
+
+                // P0：datum 為 reference geometry，不是 create_feature 特徵——
+                // 路由到基準幾何 API（在特徵交易之前建立），不進入命令列表也不做 Enum 解析。
+                if (step.FeatureType.StartsWith("datum_", StringComparison.OrdinalIgnoreCase))
+                {
+                    datumCounts.TryGetValue(step.FeatureType, out var dn);
+                    datumCounts[step.FeatureType] = ++dn;
+                    await CreateDatumFromStepAsync(step, $"{step.FeatureType}_{dn}");
+                    continue;
+                }
+
                 // 計畫的 feature_type 是 snake_case（如 linear_pattern）
                 var enumName = step.FeatureType.Replace("_", "");
                 if (!Enum.TryParse<FeatureType>(enumName, true, out var featType))
@@ -1334,6 +1360,40 @@ public class MainViewModel : INotifyPropertyChanged
     }
 
     /// <summary>
+    /// P0：把計畫中的 datum 步驟建立為 reference geometry（datum_plane/axis/point）。
+    /// datum 不屬 create_feature 特徵，走專用 API，於特徵交易之前建立。
+    /// </summary>
+    private async Task CreateDatumFromStepAsync(DesignStep step, string datumId)
+    {
+        if (_worker == null || _projectId == null) return;
+
+        var kind = step.FeatureType switch
+        {
+            "datum_axis" => "axis",
+            "datum_point" => "point",
+            _ => "plane",
+        };
+        var definition = step.Parameters != null
+            ? new Dictionary<string, object>(step.Parameters)
+            : new Dictionary<string, object>();
+        var name = string.IsNullOrWhiteSpace(step.Description) ? datumId : step.Description;
+
+        try
+        {
+            var result = await _worker.CreateReferenceGeometryAsync(_projectId, datumId, name, kind, definition);
+            if (result != null)
+                Messages.Add(ChatMessage.Assistant($"已建立基準幾何 {datumId}（{kind}）。"));
+            else
+                Messages.Add(ChatMessage.Error(
+                    $"建立基準幾何 {datumId} 失敗——後續依賴此基準的草圖可能無法定位。"));
+        }
+        catch (Exception ex)
+        {
+            Messages.Add(ChatMessage.Error($"建立基準幾何 {datumId} 失敗：{ex.Message}"));
+        }
+    }
+
+    /// <summary>
     /// 將 LLM 計畫的 plane 正規化為引擎契約格式 {"base": "XY|XZ|YZ", "offset": n}。
     /// 容忍 LLM 以 "type" 為鍵或小寫平面名。
     /// </summary>
@@ -1368,9 +1428,44 @@ public class MainViewModel : INotifyPropertyChanged
             // 取得目前特徵圖 JSON
             var featureGraphJson = await _worker.GetProjectAsync(_projectId);
 
-            // LLM 產生命令（update/create/delete/set_material/rebuild）
-            var command = await _llmProvider.CreateUpdateCommandAsync(userRequest, featureGraphJson, new List<ChatTurn>(_chatHistory));
+            // LLM 產生一批命令（可多個）或反問
+            var batch = await _llmProvider.CreateUpdateCommandAsync(userRequest, featureGraphJson, new List<ChatTurn>(_chatHistory));
 
+            // #3：需求不明確 → 反問，不硬產生命令
+            if (batch.Commands.Count == 0)
+            {
+                var q = string.IsNullOrWhiteSpace(batch.Clarification)
+                    ? "無法判斷要執行的修改，請更具體描述。"
+                    : batch.Clarification!;
+                Messages.Add(ChatMessage.Assistant(q));
+                AddHistory("assistant", q);
+                return;
+            }
+
+            // #1：一句多動作 → 交易式彙總套用（全成功才 commit）
+            if (batch.Commands.Count > 1)
+            {
+                ShowMultiCommandPlan(userRequest, batch.Commands);
+                return;
+            }
+
+            // 單一命令 → 沿用差異卡片（A2）
+            await ShowSingleCommandDiffAsync(batch.Commands[0], featureGraphJson);
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "語意修改流程失敗");
+            Messages.Add(ChatMessage.Error($"修改流程失敗：{ex.Message}"));
+        }
+    }
+
+    /// <summary>
+    /// 單一命令的差異卡片（A2 確認後套用）。
+    /// </summary>
+    private async Task ShowSingleCommandDiffAsync(CadCommand command, string featureGraphJson)
+    {
+        try
+        {
             var isCreate = command.Action == "create_feature" && command.Feature != null;
             var isDelete = command.Action == "delete_feature";
             var isSetMaterial = command.Action == "set_material";
@@ -1509,12 +1604,113 @@ public class MainViewModel : INotifyPropertyChanged
                 Messages.Add(ChatMessage.Assistant("已取消修改。"));
             });
             Messages.Add(diffMsg);
+            _pendingCard = diffMsg;
         }
         catch (Exception ex)
         {
             Log.Error(ex, "語意修改流程失敗");
             Messages.Add(ChatMessage.Error($"修改流程失敗：{ex.Message}"));
         }
+    }
+
+    /// <summary>
+    /// 多命令修改（#1）：顯示彙總卡片，確認後以 staging 交易一次套用（全成功才 commit）。
+    /// </summary>
+    private void ShowMultiCommandPlan(string userRequest, List<CadCommand> commands)
+    {
+        var display = commands.Where(c => c.Action != "rebuild").ToList();
+        if (display.Count == 0)
+        {
+            Messages.Add(ChatMessage.Assistant("沒有可套用的修改。"));
+            return;
+        }
+
+        var plan = new DesignPlan
+        {
+            Summary = $"{display.Count} 項修改：{userRequest}",
+            Steps = display.Select(c => new DesignStep
+            {
+                Description = string.IsNullOrWhiteSpace(c.Reasoning)
+                    ? DescribeCommand(c)
+                    : $"{DescribeCommand(c)} — {c.Reasoning}",
+                FeatureType = c.Feature?.Type.ToString().ToLowerInvariant() ?? c.Action,
+            }).ToList(),
+        };
+
+        AddHistory("assistant", $"[批次修改] {plan.Summary}");
+
+        var planMsg = ChatMessage.FromPlan(plan);
+        planMsg.ApplyPlanCommand = new RelayCommand(() =>
+        {
+            if (!planMsg.IsActionable) return;
+            planMsg.IsActionable = false;
+            AddHistory("user", "[套用批次修改]");
+            _ = ApplyCommandBatchAsync(commands, plan.Summary);
+        });
+        planMsg.CancelPlanCommand = new RelayCommand(() =>
+        {
+            if (!planMsg.IsActionable) return;
+            planMsg.IsActionable = false;
+            AddHistory("user", "[取消批次修改]");
+            Messages.Add(ChatMessage.Assistant("已取消修改。"));
+        });
+        Messages.Add(planMsg);
+        _pendingCard = planMsg;
+    }
+
+    /// <summary>用一句話描述一個命令，供彙總卡片顯示。</summary>
+    private static string DescribeCommand(CadCommand c) => c.Action switch
+    {
+        "create_feature" => $"新增 {c.Feature?.Type.ToString().ToLowerInvariant()} {c.Feature?.FeatureId}",
+        "update_feature" => $"修改 {c.TargetFeatureId}",
+        "delete_feature" => $"刪除 {c.TargetFeatureId}",
+        "set_material" => $"變更材質 {c.Parameters?.GetValueOrDefault("material")}",
+        _ => c.Action,
+    };
+
+    /// <summary>
+    /// 交易式套用一批命令（staging + rollback）——全成功才 commit，然後重建。（#1）
+    /// </summary>
+    private async Task ApplyCommandBatchAsync(List<CadCommand> commands, string label)
+    {
+        if (_worker == null || _projectId == null) return;
+        try
+        {
+            IsBusy = true;
+
+            // rebuild 不是 apply_plan 接受的 action，過濾掉
+            var toApply = commands.Where(c => c.Action != "rebuild").ToList();
+            foreach (var cmd in toApply)
+            {
+                var errors = CommandValidator.Validate(cmd);
+                if (errors.Count > 0)
+                {
+                    Messages.Add(ChatMessage.Error($"命令驗證失敗：{string.Join("；", errors)}"));
+                    return;
+                }
+            }
+            if (toApply.Count == 0)
+            {
+                await RebuildAsync();
+                return;
+            }
+
+            var planResult = await _worker.ApplyPlanAsync(_projectId, toApply, label);
+            if (planResult.Status == "error")
+            {
+                Messages.Add(ChatMessage.Error(
+                    $"批次修改失敗（已回滾，特徵圖未變更）：{planResult.ErrorCode} — {planResult.EngineMessage}"));
+                return;
+            }
+
+            Messages.Add(ChatMessage.Assistant($"已套用 {planResult.AppliedCount} 項修改，開始重建…"));
+            await RebuildAsync();
+        }
+        catch (Exception ex)
+        {
+            Messages.Add(ChatMessage.Error($"套用批次修改失敗：{ex.Message}"));
+        }
+        finally { IsBusy = false; }
     }
 
     /// <summary>

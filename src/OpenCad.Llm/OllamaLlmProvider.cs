@@ -25,23 +25,26 @@ public class OllamaLlmProvider : LlmProviderBase
 
     protected override async Task<string> SendStructuredAsync(string prompt, string schema, List<ChatTurn>? history = null)
     {
-        var sb = new StringBuilder();
-        sb.AppendLine($"System: {_systemPrompt}");
+        // 使用 /api/chat 的 messages 陣列（取代把 system+history+user 串成單一字串），
+        // 讓多輪對話有正確的角色邊界；format 傳入 JSON Schema 做受限解碼保證輸出合法 JSON。
+        var messages = new List<object>
+        {
+            new { role = "system", content = _systemPrompt },
+        };
         if (history != null)
         {
             foreach (var turn in history)
             {
-                // Role 通常為 user 或 assistant
-                var role = turn.Role.Equals("assistant", StringComparison.OrdinalIgnoreCase) ? "Assistant" : "User";
-                sb.AppendLine($"{role}: {turn.Content}");
+                var role = turn.Role.Equals("assistant", StringComparison.OrdinalIgnoreCase) ? "assistant" : "user";
+                messages.Add(new { role, content = turn.Content });
             }
         }
-        sb.AppendLine($"User: {prompt}");
+        messages.Add(new { role = "user", content = prompt });
 
         var requestBody = new
         {
             model = _modelName,
-            prompt = sb.ToString(),
+            messages = messages.ToArray(),
             format = JsonSerializer.Deserialize<JsonElement>(schema),
             stream = false,
             options = new { temperature = 0.1, top_p = 0.9 },
@@ -50,11 +53,16 @@ public class OllamaLlmProvider : LlmProviderBase
         var json = JsonSerializer.Serialize(requestBody, JsonOpts);
         var content = new StringContent(json, Encoding.UTF8, "application/json");
 
-        var response = await _httpClient.PostAsync("/api/generate", content);
-        response.EnsureSuccessStatusCode();
+        var response = await _httpClient.PostAsync("/api/chat", content);
+        if (!response.IsSuccessStatusCode)
+        {
+            var errBody = await response.Content.ReadAsStringAsync();
+            throw new HttpRequestException(
+                $"Ollama 請求失敗（HTTP {(int)response.StatusCode} {response.StatusCode}）：{errBody}");
+        }
 
         var body = await response.Content.ReadAsStringAsync();
         var result = JsonSerializer.Deserialize<JsonElement>(body);
-        return result.GetProperty("response").GetString()!;
+        return result.GetProperty("message").GetProperty("content").GetString()!;
     }
 }

@@ -80,7 +80,17 @@ public class OpenAiCompatibleLlmProvider : LlmProviderBase
         var response = await _httpClient.PostAsync("chat/completions", content);
         if (!response.IsSuccessStatusCode)
         {
-            // 部分後端不支援 response_format——退回純提示詞模式
+            var errorBody = await response.Content.ReadAsStringAsync();
+
+            // 僅在 400/422（多半是後端不支援 response_format）時退回純提示詞模式重試；
+            // 其他狀態碼（401 金鑰、404 模型、429 限流…）直接拋出，並保留原始錯誤內容以利除錯。
+            if (response.StatusCode != System.Net.HttpStatusCode.BadRequest &&
+                response.StatusCode != System.Net.HttpStatusCode.UnprocessableEntity)
+            {
+                throw new HttpRequestException(
+                    $"LLM 請求失敗（HTTP {(int)response.StatusCode} {response.StatusCode}）：{Truncate(errorBody)}");
+            }
+
             var fallbackBody = new
             {
                 model = _modelName,
@@ -89,7 +99,12 @@ public class OpenAiCompatibleLlmProvider : LlmProviderBase
             };
             content = new StringContent(JsonSerializer.Serialize(fallbackBody, JsonOpts), Encoding.UTF8, "application/json");
             response = await _httpClient.PostAsync("chat/completions", content);
-            response.EnsureSuccessStatusCode();
+            if (!response.IsSuccessStatusCode)
+            {
+                var retryBody = await response.Content.ReadAsStringAsync();
+                throw new HttpRequestException(
+                    $"LLM 請求失敗（退回純文字模式後 HTTP {(int)response.StatusCode} {response.StatusCode}）：{Truncate(retryBody)}");
+            }
         }
 
         var body = await response.Content.ReadAsStringAsync();
@@ -97,6 +112,9 @@ public class OpenAiCompatibleLlmProvider : LlmProviderBase
         var text = result.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString() ?? "";
         return ExtractJson(text);
     }
+
+    private static string Truncate(string s) =>
+        string.IsNullOrEmpty(s) ? "(空)" : (s.Length > 500 ? s[..500] + "…" : s);
 
     /// <summary>
     /// 從回覆中抽出 JSON——容忍 markdown 圍欄與前後說明文字。

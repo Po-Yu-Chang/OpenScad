@@ -17,6 +17,64 @@ public abstract class LlmProviderBase : ILlmProvider
     };
 
     /// <summary>
+    /// 引擎支援的 create_feature 型別——唯一真相。
+    /// 須與 schemas/feature.schema.json 的 type enum、Domain.FeatureType、
+    /// build123d 適配器的 _build_* 方法一致。datum 為 reference geometry，不屬 create_feature 型別，故不列於此。
+    /// </summary>
+    public static readonly string[] EngineSupportedFeatureTypes =
+    {
+        "sketch", "pad", "pocket", "revolve", "sweep", "loft", "hole",
+        "linear_pattern", "circular_pattern", "mirror", "fillet", "chamfer", "shell",
+        "boolean_union", "boolean_difference", "boolean_intersection",
+        "draft", "rib", "thin", "variable_fillet", "countersink", "cosmetic_thread",
+    };
+
+    /// <summary>
+    /// 引擎不支援的功能（拒絕規則）——唯一真相。
+    /// 須與 cad-worker server.py /api/capability 的 unsupported_features 一致。
+    /// </summary>
+    public static readonly string[] EngineUnsupportedFeatures =
+    {
+        "thread", "knit", "trim_surface", "thicken", "delete_face", "helical_gear",
+    };
+
+    /// <summary>JSON schema enum 內容片段——"a","b",...（不含中括號），供提示詞內嵌 schema 使用。</summary>
+    private static readonly string SupportedFeatureTypesJson =
+        string.Join(",", EngineSupportedFeatureTypes.Select(t => $"\"{t}\""));
+
+    /// <summary>不支援清單的可讀文字，供提示詞內嵌。</summary>
+    private static readonly string UnsupportedFeaturesText = string.Join("、", EngineUnsupportedFeatures);
+
+    /// <summary>
+    /// LLM 可輸出的命令 action——唯一真相，供修改流程與修復流程 schema 共用（避免三份 schema 漂移）。
+    /// </summary>
+    public static readonly string[] EngineCommandActions =
+    {
+        "create_feature", "update_feature", "delete_feature", "set_material", "rebuild",
+    };
+
+    private static readonly string CommandActionsJson =
+        string.Join(",", EngineCommandActions.Select(a => $"\"{a}\""));
+
+    private static string Snippet(string s) => s.Length > 300 ? s[..300] + "…" : s;
+
+    /// <summary>
+    /// 反序列化 LLM 回傳的 JSON；失敗時拋出含原始片段的可讀錯誤（取代靜默 null 造成的難解例外）。
+    /// </summary>
+    protected static T DeserializeOrThrow<T>(string json) where T : new()
+    {
+        try
+        {
+            return JsonSerializer.Deserialize<T>(json, JsonOpts) ?? new T();
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException(
+                $"LLM 回傳的 JSON 無法解析（{ex.Message}）。原始內容：{Snippet(json)}");
+        }
+    }
+
+    /// <summary>
     /// 送出提示詞並取得符合 schema 的 JSON 字串。由各提供者實作傳輸細節。
     /// </summary>
     protected abstract Task<string> SendStructuredAsync(string prompt, string schema, List<ChatTurn>? history = null);
@@ -63,7 +121,7 @@ engine_version: {capability.EngineVersion}
     ""steps"": { ""type"": ""array"", ""items"": { ""type"": ""object"",
       ""properties"": {
         ""description"": { ""type"": ""string"" },
-        ""feature_type"": { ""type"": ""string"", ""enum"": [""sketch"",""pad"",""pocket"",""hole"",""linear_pattern"",""circular_pattern"",""mirror"",""fillet"",""chamfer"",""shell"",""revolve"",""sweep"",""loft"",""boolean_union"",""boolean_difference"",""boolean_intersection"",""datum_plane"",""datum_axis"",""datum_point""] },
+        ""feature_type"": { ""type"": ""string"", ""enum"": [""sketch"",""pad"",""pocket"",""hole"",""linear_pattern"",""circular_pattern"",""mirror"",""fillet"",""chamfer"",""shell"",""revolve"",""sweep"",""loft"",""boolean_union"",""boolean_difference"",""boolean_intersection"",""draft"",""rib"",""thin"",""variable_fillet"",""countersink"",""cosmetic_thread"",""datum_plane"",""datum_axis"",""datum_point""] },
         ""parameters"": { ""type"": ""object"" },
         ""sketch_entities"": { ""type"": ""array"", ""items"": { ""type"": ""object"" } },
         ""constraints"": { ""type"": ""array"", ""items"": { ""type"": ""object"" }, ""description"": ""草圖約束（WP1-2）。每個約束含 id, type, targets, value_mm/value_deg, name"" },
@@ -78,42 +136,10 @@ engine_version: {capability.EngineVersion}
 }";
 
         var result = await SendStructuredAsync(userPrompt, planSchema, context.History);
-        return JsonSerializer.Deserialize<DesignPlan>(result, JsonOpts) ?? new DesignPlan();
+        return DeserializeOrThrow<DesignPlan>(result);
     }
 
-    public async Task<CadCommand> CreateCommandAsync(DesignPlan plan)
-    {
-        var userPrompt = $@"
-根據以下設計計畫，產生 OpenCad Command JSON。
-設計計畫摘要：{plan.Summary}
-
-步驟：
-{string.Join("\n", plan.Steps.Select((s, i) => $"{i + 1}. {s.Description} ({s.FeatureType})"))}
-
-請產生對應的 create_feature 或 update_feature 命令。";
-
-        var commandSchema = @"
-{
-  ""type"": ""object"",
-  ""properties"": {
-    ""schema_version"": { ""type"": ""string"", ""const"": ""1.0"" },
-    ""action"": { ""type"": ""string"", ""enum"": [""create_feature"",""update_feature"",""delete_feature"",""rebuild"",""export"",""validate""] },
-    ""document_id"": { ""type"": ""string"" },
-    ""target_feature_id"": { ""type"": ""string"" },
-    ""feature"": { ""type"": ""object"" },
-    ""parameters"": { ""type"": ""object"" },
-    ""preserve"": { ""type"": ""array"", ""items"": { ""type"": ""string"" } },
-    ""standard_parts"": { ""type"": ""object"" },
-    ""reasoning"": { ""type"": ""string"" }
-  },
-  ""required"": [""schema_version"",""action""]
-}";
-
-        var result = await SendStructuredAsync(userPrompt, commandSchema);
-        return JsonSerializer.Deserialize<CadCommand>(result, JsonOpts) ?? new CadCommand();
-    }
-
-    public async Task<CadCommand> CreateUpdateCommandAsync(string userRequest, string featureGraphJson, List<ChatTurn>? history = null)
+    public async Task<UpdateCommandBatch> CreateUpdateCommandAsync(string userRequest, string featureGraphJson, List<ChatTurn>? history = null)
     {
         // WP-H1: Capability payload
         var capability = await GetCapabilityPayloadAsync();
@@ -131,9 +157,13 @@ engine_version: {capability.EngineVersion}
 === 目前 Feature Graph（JSON） ===
 {featureGraphJson}
 
-請根據使用者需求，決定命令類型並產生對應命令：
+請根據使用者需求，產生一個或多個命令，放入 commands 陣列（依執行順序）。
+一句話含多個動作時（如「挖四個孔並倒角」＝先 hole 再 fillet），要拆成多個命令依序放入 commands，不可只做其中一個。
+每個命令的類型判斷如下：
 - 修改既有特徵的參數 → action=update_feature，指定 target_feature_id。
-- 新增特徵（圓角 fillet、倒角 chamfer、挖孔 hole/pocket、薄殼 shell、鏡射 mirror、迴轉 revolve、掃掠 sweep、放樣 loft 等）→ action=create_feature，
+- 新增特徵（圓角 fillet、倒角 chamfer、挖孔 hole/pocket、薄殼 shell、鏡射 mirror、迴轉 revolve、掃掠 sweep、放樣 loft、
+  拔模 draft、補強肋 rib、薄件 thin、變半徑圓角 variable_fillet、沉頭孔 countersink、裝飾螺紋 cosmetic_thread、
+  陣列 linear_pattern/circular_pattern、布林 boolean_union/boolean_difference/boolean_intersection 等）→ action=create_feature，
   在 feature 中給定：feature_id（新的唯一 ID，如 fillet_1）、type、input（要加工的實體特徵 ID，如最後一個 pad）、parameters。
 - 刪除既有特徵 → action=delete_feature，指定 target_feature_id。
   如果使用者說「刪掉最後的圓角」「取消倒角」「把 pocket_1 刪掉」等，用 delete_feature 而非 update_feature。
@@ -158,6 +188,15 @@ engine_version: {capability.EngineVersion}
 - revolve：angle(度，預設 360)；需要前置 sketch 步驟。
 - sweep：input=輪廓草圖，references=[路徑草圖]。
 - loft：input=第一個輪廓，references=[第二個、第三個…]。
+- linear_pattern：input=要陣列的實體特徵，parameters 含 count（總數含原件）、spacing_mm（間距）、direction（如 ""x""/""y""）。
+- circular_pattern：input=要陣列的實體特徵，parameters 含 count（總數）、angle_deg（總角度，預設 360）。
+- draft：input=實體，parameters 含 angle_deg（拔模角）、face_selector、direction。
+- rib：input=實體，parameters 含 thickness（肋厚 mm）、direction、sketch_id（肋輪廓草圖 ID）。
+- thin：input=實體，parameters 含 length、thickness。
+- variable_fillet：input=實體，parameters 含 radii（各邊半徑）或 radius、edge_selector。
+- countersink：input=實體，parameters 含 diameter、countersink_diameter、countersink_angle_deg、positions=[[x,y],…]。
+- cosmetic_thread：input=實體，parameters 含 diameter、pitch、depth、positions=[[x,y],…]。
+- boolean_union／boolean_difference／boolean_intersection：input=第一個實體，references=[其他實體特徵 ID]（對兩個以上實體做布林）。
 
 規則：
 1. 只修改使用者明確指定的特徵，其他特徵一律列入 preserve。
@@ -165,35 +204,70 @@ engine_version: {capability.EngineVersion}
 3. update_feature 只能修改該特徵型別本身既有的參數——嚴禁發明不存在的參數
    （例如在 pad 上加 fillet_radius 無效；圓角必須用 create_feature 新增 fillet 特徵）。
 4. target_feature_id／input 必須是上述 Feature Graph 中已存在的 feature_id。
-5. 如果使用者需求涉及目前不支援的功能（如 rib 加強肋、draft 拔模角），在 reasoning 中說明不支援，action 設為 rebuild（不變更模型）。";
+5. 如果使用者需求涉及引擎不支援的功能（{UnsupportedFeaturesText}），在 reasoning 中說明不支援，action 設為 rebuild（不變更模型）。
+   注意：draft 拔模、rib 補強肋、countersink 沉頭孔、linear_pattern/circular_pattern 陣列、boolean 布林等皆為支援特徵，請正常用 create_feature 建立，不可誤判為不支援。
+6. 若需求缺少必要資訊（如尺寸未給、要挖孔但沒說位置或大小、指代不清無法判斷是哪個特徵），不要亂猜也不要硬產生命令：
+   把 commands 留空陣列，並在 clarification 欄位用繁體中文寫出要向使用者反問的一句話。
+7. 每個 create_feature 的 feature_id 必須是全新且唯一的（不可與 Feature Graph 既有 ID 相同）。多個命令間有依賴時，後面的命令可引用前面命令新建的 feature_id。";
 
         var commandSchema = @"
 {
   ""type"": ""object"",
   ""properties"": {
-    ""schema_version"": { ""type"": ""string"", ""const"": ""1.0"" },
-    ""action"": { ""type"": ""string"", ""enum"": [""update_feature"",""create_feature"",""delete_feature"",""set_material"",""rebuild""], ""description"": ""修改既有特徵用 update_feature；新增特徵用 create_feature；刪除特徵用 delete_feature；變更材質用 set_material；重建用 rebuild"" },
-    ""target_feature_id"": { ""type"": ""string"", ""description"": ""update_feature/delete_feature 必填：要修改或刪除的特徵 ID，必須存在於 Feature Graph"" },
-    ""feature"": { ""type"": ""object"", ""description"": ""create_feature 必填：新特徵定義"",
+    ""commands"": { ""type"": ""array"", ""description"": ""依序執行的命令列表；一句多動作要拆成多個命令依序放入"", ""items"": {
+      ""type"": ""object"",
       ""properties"": {
-        ""feature_id"": { ""type"": ""string"", ""description"": ""新的唯一 ID，如 fillet_1"" },
-        ""type"": { ""type"": ""string"", ""enum"": [""fillet"",""chamfer"",""hole"",""pocket"",""shell"",""mirror"",""revolve"",""sweep"",""loft"",""sketch"",""pad""] },
-        ""name"": { ""type"": ""string"" },
-        ""input"": { ""type"": ""string"", ""description"": ""要加工的實體特徵 ID"" },
-        ""references"": { ""type"": ""array"", ""items"": { ""type"": ""string"" }, ""description"": ""sweep/loft 的參考草圖 ID 列表"" },
-        ""parameters"": { ""type"": ""object"" }
+        ""schema_version"": { ""type"": ""string"", ""const"": ""1.0"" },
+        ""action"": { ""type"": ""string"", ""enum"": [__ACTIONS__], ""description"": ""修改既有特徵用 update_feature；新增特徵用 create_feature；刪除特徵用 delete_feature；變更材質用 set_material；重建用 rebuild"" },
+        ""target_feature_id"": { ""type"": ""string"", ""description"": ""update_feature/delete_feature 必填：要修改或刪除的特徵 ID，必須存在於 Feature Graph"" },
+        ""feature"": { ""type"": ""object"", ""description"": ""create_feature 必填：新特徵定義"",
+          ""properties"": {
+            ""feature_id"": { ""type"": ""string"", ""description"": ""新的唯一 ID，如 fillet_1"" },
+            ""type"": { ""type"": ""string"", ""enum"": [__FEATURE_TYPES__] },
+            ""name"": { ""type"": ""string"" },
+            ""input"": { ""type"": ""string"", ""description"": ""要加工的實體特徵 ID（fillet/chamfer/hole/pocket/shell/pattern/draft/rib 等必填；sketch/pad 免）"" },
+            ""references"": { ""type"": ""array"", ""items"": { ""type"": ""string"" }, ""description"": ""sweep/loft/pocket/boolean 的參考草圖或實體 ID 列表"" },
+            ""parameters"": { ""type"": ""object"" }
+          },
+          ""required"": [""feature_id"",""type"",""parameters""] },
+        ""parameters"": { ""type"": ""object"", ""description"": ""update_feature/set_material 用：要更新的參數鍵值"" },
+        ""standard_parts"": { ""type"": ""object"", ""description"": ""要更新的標準件，如 {fastener: {standard: M5, fit: normal_clearance}}"" },
+        ""preserve"": { ""type"": ""array"", ""items"": { ""type"": ""string"" }, ""description"": ""不得變動的特徵 ID 列表"" },
+        ""reasoning"": { ""type"": ""string"" }
       },
-      ""required"": [""feature_id"",""type"",""input"",""parameters""] },
-    ""parameters"": { ""type"": ""object"", ""description"": ""update_feature/set_material 用：要更新的參數鍵值"" },
-    ""standard_parts"": { ""type"": ""object"", ""description"": ""要更新的標準件，如 {fastener: {standard: M5, fit: normal_clearance}}"" },
-    ""preserve"": { ""type"": ""array"", ""items"": { ""type"": ""string"" }, ""description"": ""不得變動的特徵 ID 列表"" },
-    ""reasoning"": { ""type"": ""string"" }
+      ""required"": [""schema_version"",""action""] } },
+    ""clarification"": { ""type"": ""string"", ""description"": ""需求不明確時向使用者反問的一句話（繁中）；填此欄時 commands 應為空陣列"" }
   },
-  ""required"": [""schema_version"",""action""]
-}";
+  ""required"": [""commands""]
+}".Replace("__FEATURE_TYPES__", SupportedFeatureTypesJson).Replace("__ACTIONS__", CommandActionsJson);
 
         var result = await SendStructuredAsync(userPrompt, commandSchema, history);
-        return JsonSerializer.Deserialize<CadCommand>(result, JsonOpts) ?? new CadCommand();
+        return ParseUpdateBatch(result);
+    }
+
+    /// <summary>
+    /// 解析修改流程回傳：優先 {commands:[...], clarification}；
+    /// 回退容忍模型直接回單一命令物件。兩者皆失敗則拋出可讀錯誤。
+    /// </summary>
+    private static UpdateCommandBatch ParseUpdateBatch(string json)
+    {
+        try
+        {
+            var batch = JsonSerializer.Deserialize<UpdateCommandBatch>(json, JsonOpts);
+            if (batch != null && (batch.Commands.Count > 0 || !string.IsNullOrWhiteSpace(batch.Clarification)))
+                return batch;
+        }
+        catch (JsonException) { /* 回退到單一命令解析 */ }
+
+        try
+        {
+            var single = JsonSerializer.Deserialize<CadCommand>(json, JsonOpts);
+            if (single != null && !string.IsNullOrWhiteSpace(single.Action))
+                return new UpdateCommandBatch { Commands = { single } };
+        }
+        catch (JsonException) { /* 落到最終錯誤 */ }
+
+        throw new InvalidOperationException($"LLM 回傳的修改命令無法解析。原始內容：{Snippet(json)}");
     }
 
     public async Task<ReviewResult> ReviewResultAsync(ValidationReport report)
@@ -223,7 +297,7 @@ engine_version: {capability.EngineVersion}
 }";
 
         var result = await SendStructuredAsync(userPrompt, reviewSchema);
-        return JsonSerializer.Deserialize<ReviewResult>(result, JsonOpts) ?? new ReviewResult();
+        return DeserializeOrThrow<ReviewResult>(result);
     }
 
     public async Task<CadCommand> RepairCommandAsync(string errorCode, string engineMessage, string featureGraphJson)
@@ -254,7 +328,9 @@ engine_version: {capability.EngineVersion}
 請產生一個 update_feature 或 delete_feature 命令來修正問題。";
 
         var result = await SendStructuredAsync(userPrompt, LlmCommandSchema);
-        return JsonSerializer.Deserialize<CadCommand>(result, JsonOpts) ?? new CadCommand { Action = "rebuild" };
+        var cmd = DeserializeOrThrow<CadCommand>(result);
+        if (string.IsNullOrEmpty(cmd.Action)) cmd.Action = "rebuild";
+        return cmd;
     }
 
     /// <summary>
@@ -267,28 +343,30 @@ engine_version: {capability.EngineVersion}
         {
             SchemaVersion = "1.0",
             EngineVersion = "opencad-worker-1.0",
-            UnsupportedFeatures = new List<string> { "thread", "knit", "trim_surface", "thicken", "delete_face", "helical_gear" },
+            UnsupportedFeatures = EngineUnsupportedFeatures.ToList(),
             Tools = new List<string> { "inspect_document", "query_feature_catalog", "propose_transaction", "validate_transaction", "rebuild_staging", "request_user_confirmation" },
         };
-        // Build feature catalog from known types
+        // Feature catalog——與 schemas/feature.schema.json 的 type enum、
+        // cad-worker server.py 的 _FEATURE_PARAM_HINTS 對齊（唯一真相）。
+        // datum 為 reference geometry，非 create_feature 型別，故不列於此。
         var catalog = new List<object>
         {
             new { type = "sketch", parameters = new[] { "sketch_entities", "plane", "constraints" } },
             new { type = "pad", parameters = new[] { "length", "taper_deg" } },
             new { type = "pocket", parameters = new[] { "depth", "through_all" } },
-            new { type = "hole", parameters = new[] { "diameter", "depth", "through_all", "positions", "hole_type" } },
-            new { type = "fillet", parameters = new[] { "radius", "edges", "exclude_holes" } },
-            new { type = "chamfer", parameters = new[] { "length", "edges", "exclude_holes" } },
-            new { type = "shell", parameters = new[] { "thickness" } },
-            new { type = "mirror", parameters = Array.Empty<string>() },
             new { type = "revolve", parameters = new[] { "angle" } },
             new { type = "sweep", parameters = Array.Empty<string>() },
             new { type = "loft", parameters = Array.Empty<string>() },
+            new { type = "hole", parameters = new[] { "diameter", "depth", "through_all", "positions", "hole_type" } },
             new { type = "linear_pattern", parameters = new[] { "count", "spacing_mm", "direction" } },
             new { type = "circular_pattern", parameters = new[] { "count", "angle_deg" } },
-            new { type = "datum_plane", parameters = new[] { "method", "source_ref", "offset_mm", "angle_deg" } },
-            new { type = "datum_axis", parameters = new[] { "method", "source_ref", "source_ref_2" } },
-            new { type = "datum_point", parameters = new[] { "method", "source_ref" } },
+            new { type = "mirror", parameters = Array.Empty<string>() },
+            new { type = "fillet", parameters = new[] { "radius", "edges", "exclude_holes" } },
+            new { type = "chamfer", parameters = new[] { "length", "edges", "exclude_holes" } },
+            new { type = "shell", parameters = new[] { "thickness" } },
+            new { type = "boolean_union", parameters = Array.Empty<string>() },
+            new { type = "boolean_difference", parameters = Array.Empty<string>() },
+            new { type = "boolean_intersection", parameters = Array.Empty<string>() },
             new { type = "draft", parameters = new[] { "angle_deg", "face_selector", "direction" } },
             new { type = "rib", parameters = new[] { "thickness", "direction", "sketch_id" } },
             new { type = "thin", parameters = new[] { "length", "thickness" } },
@@ -336,12 +414,12 @@ engine_version: {capability.EngineVersion}
         return true;
     }
 
-    private const string LlmCommandSchema = @"
+    private static readonly string LlmCommandSchema = @"
 {
   ""type"": ""object"",
   ""properties"": {
     ""schema_version"": { ""type"": ""string"", ""const"": ""1.0"" },
-    ""action"": { ""type"": ""string"", ""enum"": [""create_feature"",""update_feature"",""delete_feature"",""rebuild"",""export"",""validate"",""set_material""] },
+    ""action"": { ""type"": ""string"", ""enum"": [__ACTIONS__] },
     ""document_id"": { ""type"": ""string"" },
     ""target_feature_id"": { ""type"": ""string"" },
     ""feature"": { ""type"": ""object"" },
@@ -351,7 +429,7 @@ engine_version: {capability.EngineVersion}
     ""reasoning"": { ""type"": ""string"" }
   },
   ""required"": [""schema_version"",""action""]
-}";
+}".Replace("__ACTIONS__", CommandActionsJson);
 
     protected static string BuildSystemPrompt() =>
         "你是 OpenCad 的 AI 建模助手。你的任務是：\n" +
@@ -377,7 +455,9 @@ engine_version: {capability.EngineVersion}
         "    使用者說「刪除」「取消」「刪掉」某特徵時，用 delete_feature + target_feature_id，不要用 update_feature。\n" +
         "15. 孔的陣列/排列：hole 特徵的 positions 參數為 [[x,y],...] 座標列表，可直接建立多孔排列（如四個固定孔）。\n" +
         "    重要：孔的排列一律使用 positions，不要使用 linear_pattern 或 circular_pattern（Pattern 僅支援實體特徵，不支援切除）。\n" +
-        "16. 目前不支援的功能：rib（加強肋）、draft（拔模角）。如果使用者要求這些，在 reasoning 中說明不支援，action 設為 rebuild（不變更模型）。\n" +
+        "16. 進階特徵皆可用 create_feature 建立（勿誤判為不支援）：draft（拔模角）、rib（補強肋）、thin（薄件）、\n" +
+        "    variable_fillet（變半徑圓角）、countersink（沉頭孔）、cosmetic_thread（裝飾螺紋）、\n" +
+        "    linear_pattern/circular_pattern（陣列）、boolean_union/boolean_difference/boolean_intersection（布林）。\n" +
         "17. 修改流程中挖圓孔/貫穿孔：一律使用 hole 特徵（diameter + positions），不要用 pocket。\n" +
         "    pocket 需要 references 指向已有的 sketch 特徵作為輪廓，修改流程中無法同時建立 sketch + pocket 兩個特徵。\n" +
         "    hole 的 positions 用 [[x,y],...] 格式，中心孔用 [[0,0]]。diameter 是直徑(mm)，radius 是半徑——注意換算（radius 3mm = diameter 6mm）。\n" +
@@ -394,7 +474,7 @@ engine_version: {capability.EngineVersion}
         "    a. 缺尺寸→必須提問，不得自行猜測數值（如「做一個盒子」無尺寸→提問，不可用任意值）。\n" +
         "    b. selector 歧義→要求使用者點選（如「挖一個孔」未指定位置→提問，回傳 missing_info）。\n" +
         "    c. 不支援的功能→明確說明不支援，**不得偷換近似幾何**（如「螺旋齒輪」→拒絕，不可改為圓柱）。\n" +
-        "       目前不支援清單：rib(加強肋)、draft(拔模角)、thread(螺紋)、knit/sew、trim_surface、thicken、delete_face、helical_gear。\n" +
+        $"       目前不支援清單（唯一真相）：{UnsupportedFeaturesText}。\n" +
         "    d. 不得靜默改尺寸/刪特徵——所有變更必須在 reasoning 中說明。\n" +
         "    e. 破壞性命令（delete_feature）必須在 reasoning 中明確說明刪除目標與影響範圍。\n" +
         "21. WP-H1 Capability payload：每次呼叫必帶 schema_version=1.0、engine_version、feature_catalog。\n" +
