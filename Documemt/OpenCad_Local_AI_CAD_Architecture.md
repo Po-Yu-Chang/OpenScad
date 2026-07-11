@@ -348,6 +348,9 @@ flowchart TD
 每個特徵至少需要：
 
 - 唯一且穩定的 `feature_id`
+- 正確的 `plane` 定義（對於草圖特徵）：
+  - `base`: 基準面，可以是 "XY"、"XZ"、"YZ" 或 "datum:id"（引用自訂基準面）
+  - `offset`: 基準面偏移距離（mm）
 - 類型
 - 輸入參照
 - 參數
