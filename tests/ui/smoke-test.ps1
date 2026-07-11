@@ -1,7 +1,13 @@
-﻿# OpenCad UI 冒煙測試——以 UIAutomation 驅動真實視窗驗證垂直切片。
-# 用法：powershell -ExecutionPolicy Bypass -File tests\ui\smoke-test.ps1
-# 前置：已 dotnet build、Python 環境含 build123d。
+# OpenCad UI 冒煙測試——以 UIAutomation 驅動真實視窗驗證垂直切片。
+# 用法：powershell -ExecutionPolicy Bypass -File tests\ui\smoke-test.ps1 [-Engine build123d|freecad]
+# 前置：已 dotnet build、Python 環境含 build123d（build123d 引擎）或 FreeCAD（freecad 引擎）。
 # 通過標準：載入範例後 log 出現 rebuild 200 與 preview.glb 200，關閉後無殘留 worker。
+
+param(
+    [Parameter()]
+    [ValidateSet("build123d", "freecad")]
+    [string]$Engine = "build123d"
+)
 
 $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName UIAutomationClient
@@ -27,10 +33,36 @@ $exeDir = Join-Path $repoRoot "src\OpenCad.Desktop\bin\Debug\net8.0"
 $exe = Join-Path $exeDir "OpenCad.Desktop.exe"
 if (-not (Test-Path $exe)) { Write-Error "找不到 $exe——請先 dotnet build"; exit 1 }
 
+# 設定引擎配置
+$settingsDir = Join-Path $env:USERPROFILE ".opencad"
+$settingsFile = Join-Path $settingsDir "settings.json"
+if (-not (Test-Path $settingsDir)) {
+    New-Item -ItemType Directory -Path $settingsDir | Out-Null
+}
+
+# 建立引擎設定
+$settings = @{
+    engine = $Engine
+    llm = @{
+        provider = "none"
+    }
+}
+
+if ($Engine -eq "freecad") {
+    # 檢查 FreeCAD 目錄是否存在
+    $freecadDir = Join-Path $repoRoot "FreeCAD" "FreeCAD_1.1.1-Windows-x86_64-py311"
+    if (Test-Path $freecadDir) {
+        $settings.freecad_dir = $freecadDir
+    }
+}
+
+# 寫入設定檔
+$settings | ConvertTo-Json -Depth 3 | Set-Content -Path $settingsFile -Encoding UTF8
+
 Set-Location $exeDir
 Remove-Item opencad*.log -ErrorAction SilentlyContinue
 
-Write-Host "1/5 啟動應用程式..." -ForegroundColor Cyan
+Write-Host "1/5 啟動應用程式 (引擎: $Engine)..." -ForegroundColor Cyan
 $p = Start-Process -FilePath $exe -PassThru
 Start-Sleep -Seconds 24
 
@@ -76,10 +108,11 @@ catch {
 finally {
     Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 6
+    # 檢查殘留的 worker 程序（python 或 python.exe）
     $stray = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
         Where-Object { $_.LocalAddress -eq "127.0.0.1" } |
         ForEach-Object { Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue } |
-        Where-Object { $_.ProcessName -eq "python" -and $_.StartTime -gt (Get-Date).AddMinutes(-3) }
+        Where-Object { ($_.ProcessName -eq "python" -or $_.ProcessName -eq "python.exe") -and $_.StartTime -gt (Get-Date).AddMinutes(-3) }
     if ($stray) {
         Write-Host "FAIL: 關閉後仍有殘留 worker（$($stray.Count) 個）" -ForegroundColor Red
         $stray | Stop-Process -Force

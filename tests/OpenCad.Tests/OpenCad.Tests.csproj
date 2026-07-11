@@ -23,6 +23,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\OpenCad.Domain\OpenCad.Domain.csproj" />
     <ProjectReference Include="..\..\src\OpenCad.Application\OpenCad.Application.csproj" />
+    <ProjectReference Include="..\..\src\OpenCad.Desktop\OpenCad.Desktop.csproj" />
   </ItemGroup>
 
 </Project>

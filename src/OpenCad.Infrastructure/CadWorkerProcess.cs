@@ -15,14 +15,25 @@ public class CadWorkerProcess : IDisposable
     private readonly ILogger _logger;
     private string? _sessionToken;
     private string? _tokenFilePath;
+    private readonly string? _engine;
+    private readonly string? _freecadDir;
 
     /// <param name="workerPath">cad-worker 目錄路徑</param>
     /// <param name="pythonPath">Python 可執行檔路徑（如 python3）</param>
-    public CadWorkerProcess(string workerPath, string pythonPath = "python", ILogger? logger = null)
+    /// <param name="engine">引擎選擇："build123d"（預設）或 "freecad"</param>
+    /// <param name="freecadDir">FreeCAD 安裝目錄（engine=freecad 時使用）</param>
+    /// <param name="logger">Serilog logger</param>
+    public CadWorkerProcess(string workerPath, string pythonPath = "python",
+        string? engine = null, string? freecadDir = null, ILogger? logger = null)
     {
         _workerPath = workerPath;
         _pythonPath = pythonPath;
+        _engine = engine;
+        _freecadDir = freecadDir;
         _logger = logger ?? Log.Logger;
+        
+        // WP1-0R: 驗證引擎設定與 Python 路徑
+        ValidateEngineAndPythonPath();
     }
 
     /// <summary>
@@ -35,6 +46,32 @@ public class CadWorkerProcess : IDisposable
     /// 避免殭屍 Worker 佔用固定埠導致綁定失敗。
     /// </summary>
     public int Port { get; private set; }
+    
+    /// <summary>
+    /// 驗證引擎設定與 Python 路徑的相容性
+    /// </summary>
+    private void ValidateEngineAndPythonPath()
+    {
+        if (_engine == "freecad")
+        {
+            // 檢查是否使用 FreeCAD 的 Python
+            if (!_pythonPath.Contains("FreeCAD") && !_pythonPath.Contains("freecad"))
+            {
+                _logger.Warning("引擎設為 freecad 但 Python 路徑似乎不是 FreeCAD 的 Python: {Path}", _pythonPath);
+            }
+            
+            // 檢查 Python 可執行檔是否存在
+            if (!File.Exists(_pythonPath))
+            {
+                _logger.Error("引擎設為 freecad 但找不到指定的 Python 可執行檔: {Path}", _pythonPath);
+            }
+        }
+        else if (_engine == "build123d")
+        {
+            // 對於 build123d 引擎，使用系統 Python 是正常的
+            _logger.Information("使用 build123d 引擎，Python 路徑: {Path}", _pythonPath);
+        }
+    }
 
     /// <summary>
     /// 3D Viewer 靜態檔案目錄（viewer.html＋assets）。
@@ -68,6 +105,13 @@ public class CadWorkerProcess : IDisposable
         _tokenFilePath = Path.Combine(Path.GetTempPath(), $"opencad_token_{Guid.NewGuid():N}.txt");
         Port = FindFreePort();
 
+        // WP1-0R: 驗證引擎設定與 Python 路徑
+        if (_engine == "freecad" && !File.Exists(_pythonPath))
+        {
+            _logger.Error("引擎設為 freecad 但找不到指定的 Python 可執行檔: {Path}", _pythonPath);
+            return false;
+        }
+
         var startInfo = new ProcessStartInfo
         {
             FileName = _pythonPath,
@@ -85,6 +129,12 @@ public class CadWorkerProcess : IDisposable
         startInfo.Environment["OPENCAD_PARENT_PID"] = Environment.ProcessId.ToString();
         if (!string.IsNullOrEmpty(ViewerDir))
             startInfo.Environment["OPENCAD_VIEWER_DIR"] = ViewerDir;
+
+        // WP1-0R: 引擎選擇——傳遞給 Worker
+        if (!string.IsNullOrEmpty(_engine))
+            startInfo.Environment["OPENCAD_ENGINE"] = _engine;
+        if (!string.IsNullOrEmpty(_freecadDir))
+            startInfo.Environment["FREECAD_DIR"] = _freecadDir;
 
         try
         {
@@ -143,7 +193,27 @@ public class CadWorkerProcess : IDisposable
             {
                 var resp = await http.GetAsync($"http://127.0.0.1:{Port}/api/health");
                 if (resp.IsSuccessStatusCode)
+                {
+                    // WP1-0R: 驗證引擎設定與實際使用的引擎是否一致
+                    if (!string.IsNullOrEmpty(_engine))
+                    {
+                        var healthContent = await resp.Content.ReadAsStringAsync();
+                        if (_engine == "freecad" && healthContent.Contains("\"unavailable\""))
+                        {
+                            _logger.Error("引擎設為 freecad 但 Worker health 顯示引擎不可用: {Health}", healthContent);
+                            return false;
+                        }
+                        else if (_engine == "freecad" && !healthContent.Contains("\"freecad\"") && !healthContent.Contains("\"engine\":\"freecad\""))
+                        {
+                            _logger.Warning("引擎設為 freecad 但 Worker health 未回報 freecad 引擎: {Health}", healthContent);
+                        }
+                        else if (_engine == "build123d" && !healthContent.Contains("\"build123d\"") && !healthContent.Contains("\"engine\":\"build123d\""))
+                        {
+                            _logger.Warning("引擎設為 build123d 但 Worker health 未回報 build123d 引擎: {Health}", healthContent);
+                        }
+                    }
                     return true;
+                }
             }
             catch
             {
