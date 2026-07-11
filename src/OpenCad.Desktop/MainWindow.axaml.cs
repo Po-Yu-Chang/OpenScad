@@ -123,26 +123,33 @@ public partial class MainWindow : Window
 
     private void OnPromptKeyDown(object? sender, KeyEventArgs e)
     {
-        if (e.Key != Key.Enter || e.KeyModifiers != KeyModifiers.None)
-            return;
-
-        // IME 防護 1：組字中（候選字未確認）——Enter 是選字，不是送出
-        var presenter = GetPromptPresenter();
-        if (!string.IsNullOrEmpty(presenter?.PreeditText))
-            return;
-
-        // IME 防護 2：剛完成選字的同一顆 Enter（commit 後 KeyDown 才到達）——不送出
-        if ((DateTime.UtcNow - _lastImeCommitUtc).TotalMilliseconds < 150)
+        // Handle Enter key for sending message (without Shift modifier)
+        if (e.Key == Key.Enter && e.KeyModifiers == KeyModifiers.None)
         {
-            e.Handled = true;   // 也不要讓 TextBox 插入換行
-            return;
+            // IME 防護 1：組字中（候選字未確認）——Enter 是選字，不是送出
+            var presenter = GetPromptPresenter();
+            if (!string.IsNullOrEmpty(presenter?.PreeditText))
+                return;
+
+            // IME 防護 2：剛完成選字的同一顆 Enter（commit 後 KeyDown 才到達）——不送出
+            if ((DateTime.UtcNow - _lastImeCommitUtc).TotalMilliseconds < 150)
+            {
+                e.Handled = true;   // 也不要讓 TextBox 插入換行
+                return;
+            }
+
+            if (DataContext is ViewModels.MainViewModel vm &&
+                !string.IsNullOrWhiteSpace(vm.InputText))
+            {
+                e.Handled = true;
+                vm.SendCommand.Execute(null);
+            }
         }
-
-        if (DataContext is ViewModels.MainViewModel vm &&
-            !string.IsNullOrWhiteSpace(vm.InputText))
+        // Allow Shift+Enter to create new line (don't handle it here)
+        else if (e.Key == Key.Enter && e.KeyModifiers == KeyModifiers.Shift)
         {
-            e.Handled = true;
-            vm.SendCommand.Execute(null);
+            // Let the TextBox handle Shift+Enter for new line insertion
+            return;
         }
     }
 

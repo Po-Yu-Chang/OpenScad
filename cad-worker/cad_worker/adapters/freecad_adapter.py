@@ -244,6 +244,45 @@ class FreeCADShapeWrapper:
         """回傳包圍盒。"""
         return self._shape.BoundBox
 
+    @property
+    def volume(self) -> float:
+        """回傳體積（mm³），與 build123d Part.volume 相容。"""
+        try:
+            return float(self._shape.Volume)
+        except Exception:
+            return 0.0
+
+    @property
+    def area(self) -> float:
+        """回傳表面積（mm²），與 build123d Part.area 相容。"""
+        try:
+            return float(self._shape.Area)
+        except Exception:
+            return 0.0
+
+    def bounding_box(self):
+        """回傳與 build123d 相容的 bounding box 物件。
+
+        build123d 的 bounding_box() 回傳含 .min/.max/.size 的物件，
+        每個分量有 .X/.Y/.Z。
+        FreeCAD 的 BoundBox 有 .XMin/.XMax/.YMin/.YMax/.ZMin/.ZMax。
+        """
+        bb = self._shape.BoundBox
+
+        class _Vec:
+            def __init__(self, x, y, z):
+                self.X = x
+                self.Y = y
+                self.Z = z
+
+        class _BBox:
+            def __init__(self, bb):
+                self.min = _Vec(bb.XMin, bb.YMin, bb.ZMin)
+                self.max = _Vec(bb.XMax, bb.YMax, bb.ZMax)
+                self.size = _Vec(bb.XLength, bb.YLength, bb.ZLength)
+
+        return _BBox(bb)
+
 
 class TopologyTrace:
     """記錄重建期間每個特徵建立或修改了哪些面與邊。

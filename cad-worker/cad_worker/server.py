@@ -33,6 +33,13 @@ from .feature_graph import FeatureGraph, Feature, FeatureType, ParameterValue, R
 from .validators import GeometryValidator, ValidationReport
 from .exporters import ExportManager, GlbExporter
 from .sketch_solver import solve as solve_sketch, Constraint, CONSTRAINT_TYPES
+
+# WP1-0R 地雷 #17: FreeCAD Document 非線程安全——rebuild 必須全域序列化。
+# 兩個引擎都鎖（build123d 無害且簡單）。
+_rebuild_lock = asyncio.Lock()
+
+# WP1-0R: 引擎狀態——記錄請求的引擎與實際生效的引擎
+_ENGINE_REQUESTED = os.environ.get("OPENCAD_ENGINE", "build123d").lower()
 from .atomic_save import (
     atomic_write_json, atomic_write_bytes,
     compute_file_sha256,
@@ -65,7 +72,13 @@ from contextlib import asynccontextmanager
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    # startup: nothing special
+    # startup: WP1-0R: Explicitly check engine availability at startup
+    # This will fail fast if OPENCAD_ENGINE=freecad but FreeCAD is unavailable
+    try:
+        _get_adapter()
+    except ImportError as e:
+        print(f"Startup failed: {e}")
+        raise
     yield
     # shutdown: 清除所有專案的 journal——標記為正常關閉
     for proj_id, proj in projects.items():
@@ -257,10 +270,21 @@ class ExportRequest(BaseModel):
 @app.get("/api/health")
 async def health() -> dict[str, Any]:
     """健康檢查。"""
+    # WP1-0R: 回傳實際生效引擎與請求引擎
+    engine_requested = os.environ.get("OPENCAD_ENGINE", "build123d").lower()
+    engine_actual = engine_requested
+    if engine_requested == "freecad":
+        from .adapters.freecad_adapter import FREECAD_AVAILABLE
+        if not FREECAD_AVAILABLE:
+            engine_actual = "unavailable"
+    else:
+        engine_actual = "build123d"
     return {
-        "status": "ok",
+        "status": "ok" if engine_actual != "unavailable" else "degraded",
         "version": "0.1.0",
         "build123d_available": _check_build123d(),
+        "engine": engine_actual,
+        "engine_requested": engine_requested,
     }
 
 
@@ -567,10 +591,12 @@ async def _commit_graph_mutation(proj: dict[str, Any], req: ApplyCommandRequest,
         raise HTTPException(400, str(e))
 
     # staging 重建驗證（CPU-bound 丟 thread，事件迴圈不凍結）
+    # WP1-0R 地雷 #17: 全域序列化——FreeCAD Document 非線程安全
     try:
         _rebuild_reference_geometry(staging, {})
         adapter = _get_adapter()
-        build_result = await asyncio.to_thread(adapter.build_with_trace, staging)
+        async with _rebuild_lock:
+            build_result = await asyncio.to_thread(adapter.build_with_trace, staging)
     except ImportError as e:
         raise HTTPException(503, f"CAD 引擎未安裝: {e}")
     except Exception as e:
@@ -1259,9 +1285,9 @@ async def _rebuild(project_id: str, proj: dict[str, Any]) -> dict[str, Any]:
 
     try:
         adapter = _get_adapter()
-        # CPU-bound 的 OCCT 重建丟到 thread：事件迴圈（SSE、輪詢橋）不凍結，
-        # 且 wait_for 超時能在 await 點取消——取消後這裡之後的 proj 寫入不會執行
-        build_result = await asyncio.to_thread(adapter.build_with_trace, graph)
+        # WP1-0R 地雷 #17: 全域序列化——FreeCAD Document 非線程安全
+        async with _rebuild_lock:
+            build_result = await asyncio.to_thread(adapter.build_with_trace, graph)
         part = build_result.part
         proj["part"] = part
         trace = build_result.trace
@@ -1352,7 +1378,9 @@ async def _rebuild_dry_run(project_id: str, proj: dict[str, Any]) -> dict[str, A
     try:
         _rebuild_reference_geometry(graph_backup, {})
         adapter = _get_adapter()
-        build_result = await asyncio.to_thread(adapter.build_with_trace, graph_backup)
+        # WP1-0R 地雷 #17: 全域序列化——FreeCAD Document 非線程安全
+        async with _rebuild_lock:
+            build_result = await asyncio.to_thread(adapter.build_with_trace, graph_backup)
         part = build_result.part
         volume_mm3 = float(part.volume) if part else 0.0
         area_mm2 = float(part.area) if part else 0.0
@@ -1445,16 +1473,19 @@ def _get_adapter():
     依 OPENCAD_ENGINE 環境變數切換：
     - "freecad"：使用 FreeCAD Adapter（需要 FREECAD_DIR）
     - "build123d"（預設）：使用 build123d Adapter
+
+    WP1-0R: OPENCAD_ENGINE=freecad 但 FreeCAD 不可用時，不再靜默回退到 build123d。
+    權威核心不得被偷換——直接拋 ImportError，由呼叫端轉為 503。
     """
     engine = os.environ.get("OPENCAD_ENGINE", "build123d").lower()
     if engine == "freecad":
-        try:
-            from .adapters.freecad_adapter import FreeCADAdapter, FREECAD_AVAILABLE
-            if FREECAD_AVAILABLE:
-                return FreeCADAdapter()
-            # FreeCAD 不可用，回退到 build123d
-        except ImportError:
-            pass
+        from .adapters.freecad_adapter import FreeCADAdapter, FREECAD_AVAILABLE, _FREECAD_IMPORT_ERROR
+        if not FREECAD_AVAILABLE:
+            raise ImportError(
+                f"OPENCAD_ENGINE=freecad 但 FreeCAD 不可用: {_FREECAD_IMPORT_ERROR or '未知原因'}。"
+                f"請設定 FREECAD_DIR 環境變數指向 FreeCAD 安裝目錄。"
+            )
+        return FreeCADAdapter()
     from .adapters import Build123dAdapter
     return Build123dAdapter()
 

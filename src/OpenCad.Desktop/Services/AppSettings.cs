@@ -37,6 +37,16 @@ public class AppSettings
     [JsonPropertyName("llm")]
     public LlmSettings Llm { get; set; } = new();
 
+    /// <summary>幾何引擎："build123d"（預設）或 "freecad"。
+    /// 僅開發機便利——正式打包另議。</summary>
+    [JsonPropertyName("engine")]
+    public string Engine { get; set; } = "build123d";
+
+    /// <summary>FreeCAD 安裝目錄路徑。空字串＝使用 repo 根的
+    /// FreeCAD\FreeCAD_1.1.1-Windows-x86_64-py311\（僅開發機便利）。</summary>
+    [JsonPropertyName("freecad_dir")]
+    public string FreeCadDir { get; set; } = "";
+
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
         WriteIndented = true,
