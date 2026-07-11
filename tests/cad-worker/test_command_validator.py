@@ -40,6 +40,17 @@ class TestCommandValidator:
         })
         assert any("input" in e for e in errors)
 
+    def test_hole_diameter_typo_is_rejected(self):
+        """CT-008: hole 參數打錯字（diamter 而非 diameter）不得被默默忽略。"""
+        errors = CommandValidator.validate({
+            "action": "create_feature",
+            "feature": {"feature_id": "h1", "type": "hole", "name": "H",
+                        "input": "p1",
+                        "parameters": {"diamter": 3, "through_all": True}},  # 故意 typo
+        })
+        # 缺真正的 diameter → 被拒（不會靜默把 diamter 當 diameter）
+        assert any("diameter" in e for e in errors)
+
     def test_fillet_without_radius_returns_error(self):
         errors = CommandValidator.validate({
             "action": "create_feature",
