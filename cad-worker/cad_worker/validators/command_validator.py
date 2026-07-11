@@ -144,12 +144,10 @@ class CommandValidator:
             if "diameter" not in params and "diameter_mm" not in params and not std_parts:
                 errors.append(f"特徵 {fid}（hole）缺少 diameter 或 standard_parts")
 
-        # plane 格式檢查
+        # plane 格式檢查（缺 plane 視為 XY，向下相容——Master Plan §包D，既有專案/範例不得壞）
         if ftype == "sketch":
             plane = feature.get("plane", {})
-            if not plane:
-                errors.append(f"特徵 {fid}（sketch）缺少 plane 定義")
-            else:
+            if plane:
                 base = str(plane.get("base", "XY")).upper()
                 if base not in ("XY", "XZ", "YZ"):
                     # 檢查是否為 datum 平面引用
