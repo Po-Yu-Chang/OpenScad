@@ -79,28 +79,46 @@ try {
     [SmokeMouse]::SetForegroundWindow((New-Object IntPtr($win.Current.NativeWindowHandle))) | Out-Null
     Start-Sleep -Milliseconds 500
 
-    # 以「Name 包含 載入範例」比對，避免 header 空格/箭頭字元微調就失配
-    $miType = New-Object System.Windows.Automation.PropertyCondition(
-        [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-        [System.Windows.Automation.ControlType]::MenuItem)
-    $allMenus = $win.FindAll([System.Windows.Automation.TreeScope]::Descendants, $miType)
-    $menu = $null
-    foreach ($m in $allMenus) { if ($m.Current.Name -like "*載入範例*") { $menu = $m; break } }
-    if (-not $menu) {
-        $names = ($allMenus | ForEach-Object { $_.Current.Name }) -join " | "
-        throw "找不到載入範例選單。現有 MenuItem：$names"
+    # 開始頁的 Menu 用 FindAll(Descendants) 會漏撈（Avalonia/UIA 對 Menu/Popup 的怪癖）；
+    # 改用 TreeWalker 遞迴 + Name 包含比對，對 header 空格/箭頭微調也有韌性。
+    $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+    function Find-ByName($el, $needle, $maxDepth = 14) {
+        if ($maxDepth -lt 0) { return $null }
+        if ($el.Current.Name -like "*$needle*") { return $el }
+        $c = $walker.GetFirstChild($el)
+        while ($c) {
+            $f = Find-ByName $c $needle ($maxDepth - 1)
+            if ($f) { return $f }
+            $c = $walker.GetNextSibling($c)
+        }
+        return $null
     }
-    $r = $menu.Current.BoundingRectangle
-    [SmokeMouse]::Click([int]($r.X + $r.Width/2), [int]($r.Y + $r.Height/2))
-    Start-Sleep -Seconds 2
 
-    $itemCond = New-Object System.Windows.Automation.PropertyCondition(
-        [System.Windows.Automation.AutomationElement]::NameProperty, "NEMA17 馬達座")
-    $item = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $itemCond)
+    # 開始頁：展開「載入範例」子選單。用 ExpandCollapse pattern（不靠滑鼠座標/時序）
+    $menu = Find-ByName $win "載入範例"
+    if (-not $menu) { throw "找不到載入範例選單（開始頁）" }
+    try {
+        $ecp = [System.Windows.Automation.ExpandCollapsePattern]$menu.GetCurrentPattern(
+            [System.Windows.Automation.ExpandCollapsePattern]::Pattern)
+        $ecp.Expand()
+    } catch {
+        $r = $menu.Current.BoundingRectangle
+        [SmokeMouse]::Click([int]($r.X + $r.Width/2), [int]($r.Y + $r.Height/2))
+    }
+    Start-Sleep -Seconds 1
+
+    # 直接用 Invoke pattern 觸發 NEMA17（避免 popup 關閉/座標偏差）
+    $item = Find-ByName $root "NEMA17"
     if (-not $item) { throw "找不到 NEMA17 選單項" }
-    $r2 = $item.Current.BoundingRectangle
-    [SmokeMouse]::Click([int]($r2.X + $r2.Width/2), [int]($r2.Y + $r2.Height/2))
-    Write-Host "3/5 已點擊載入範例，等待建模..." -ForegroundColor Cyan
+    try {
+        $inv = [System.Windows.Automation.InvokePattern]$item.GetCurrentPattern(
+            [System.Windows.Automation.InvokePattern]::Pattern)
+        $inv.Invoke()
+    } catch {
+        $r2 = $item.Current.BoundingRectangle
+        [SmokeMouse]::Click([int]($r2.X + $r2.Width/2), [int]($r2.Y + $r2.Height/2))
+    }
+    Write-Host "3/5 已觸發載入範例，等待建模..." -ForegroundColor Cyan
     Start-Sleep -Seconds 40
 
     $log = Get-Content opencad*.log -Raw
