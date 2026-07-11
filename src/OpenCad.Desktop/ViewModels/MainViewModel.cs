@@ -747,6 +747,7 @@ public class MainViewModel : INotifyPropertyChanged
                     Feature = feature,
                 };
 
+                if (_worker == null || _projectId == null) return;
                 var result = await _worker.ApplyCommandAsync(_projectId, command);
                 if (result.Status == "error")
                 {
