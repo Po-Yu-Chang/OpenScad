@@ -1,53 +1,80 @@
 <Application xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              x:Class="OpenCad.Desktop.App"
-             RequestedThemeVariant="Dark">
+             RequestedThemeVariant="Light">
 
     <Application.Resources>
-        <!-- Catppuccin Mocha 色票 -->
-        <SolidColorBrush x:Key="BaseBrush"        Color="#1e1e2e"/>
-        <SolidColorBrush x:Key="MantleBrush"     Color="#181825"/>
-        <SolidColorBrush x:Key="CrustBrush"      Color="#11111b"/>
-        <SolidColorBrush x:Key="SurfaceBrush"    Color="#313244"/>
-        <SolidColorBrush x:Key="Surface1Brush"   Color="#45475a"/>
-        <SolidColorBrush x:Key="TextBrush"       Color="#cdd6f4"/>
-        <SolidColorBrush x:Key="SubtextBrush"    Color="#a6adc8"/>
-        <SolidColorBrush x:Key="OverlayBrush"    Color="#6c7086"/>
-        <SolidColorBrush x:Key="AccentBrush"    Color="#89b4fa"/>
-        <SolidColorBrush x:Key="SuccessBrush"   Color="#a6e3a1"/>
-        <SolidColorBrush x:Key="WarningBrush"   Color="#f9e2af"/>
-        <SolidColorBrush x:Key="ErrorBrush"     Color="#f38ba8"/>
-        <SolidColorBrush x:Key="BorderBrush"    Color="#313244"/>
-        <SolidColorBrush x:Key="OverlayBgBrush" Color="#CC1e1e2e"/>
+        <!-- ══ 暖色復古色票（WYGINS+ 參考）——沿用原有 key 名，所有 DynamicResource 自動生效 ══ -->
+        <SolidColorBrush x:Key="BaseBrush"       Color="#F6EFDA"/>  <!-- 奶油底：視窗/視埠/輸入框 -->
+        <SolidColorBrush x:Key="MantleBrush"     Color="#EFE6CC"/>  <!-- 面板：工具列/側欄 -->
+        <SolidColorBrush x:Key="CrustBrush"      Color="#E7DCBE"/>  <!-- 狀態列底 -->
+        <SolidColorBrush x:Key="SurfaceBrush"    Color="#E8DEC0"/>  <!-- 沙：助手氣泡/hover -->
+        <SolidColorBrush x:Key="Surface1Brush"   Color="#C6A4D0"/>  <!-- 薰衣草紫：使用者氣泡 -->
+        <SolidColorBrush x:Key="TextBrush"       Color="#2A2622"/>  <!-- 暖黑：主文字 -->
+        <SolidColorBrush x:Key="SubtextBrush"    Color="#6E6353"/>  <!-- 暖棕灰：次文字 -->
+        <SolidColorBrush x:Key="OverlayBrush"    Color="#A99F8C"/>
+        <SolidColorBrush x:Key="AccentBrush"     Color="#D15E2A"/>  <!-- 赤陶橘：主強調 -->
+        <SolidColorBrush x:Key="SuccessBrush"    Color="#5E6B2E"/>  <!-- 橄欖綠：通過/連線 -->
+        <SolidColorBrush x:Key="WarningBrush"    Color="#8A6410"/>  <!-- 芥末（壓深以達 AA 對比）：警告 -->
+        <SolidColorBrush x:Key="ErrorBrush"      Color="#B23B22"/>  <!-- 磚紅：錯誤 -->
+        <SolidColorBrush x:Key="BorderBrush"     Color="#E2D6B2"/>  <!-- 暖分隔線 -->
+        <SolidColorBrush x:Key="OverlayBgBrush"  Color="#CCF6EFDA"/>
+
+        <!-- 分類色（供卡片/點綴/未來 CommandManager 使用） -->
+        <SolidColorBrush x:Key="LavBrush"        Color="#C6A4D0"/>
+        <SolidColorBrush x:Key="GoldBrush"       Color="#C6A02E"/>
+        <SolidColorBrush x:Key="TerraBrush"      Color="#D15E2A"/>
+        <SolidColorBrush x:Key="BlueBrush"       Color="#D6E6F5"/>
+        <SolidColorBrush x:Key="SandBrush"       Color="#E8DEC0"/>
+        <SolidColorBrush x:Key="CreamTextBrush"  Color="#FBF3E0"/>
+
+        <!-- 字型：內文/標題用無襯線（中文乾淨）。DisplayFont 保留給拉丁/數字顯示或未來 .ttf——
+             Georgia 無中文字符，故不套用於中文標題（方向 B）。 -->
+        <FontFamily x:Key="DisplayFont">Georgia, Times New Roman, serif</FontFamily>
+        <FontFamily x:Key="BodyFont">Segoe UI, Microsoft JhengHei UI, sans-serif</FontFamily>
     </Application.Resources>
 
     <Application.Styles>
         <FluentTheme />
         <StyleInclude Source="avares://Avalonia.Controls.DataGrid/Themes/Fluent.xaml" />
 
-        <!-- 工具列按鈕：透明底、hover SurfaceBrush、圓角 -->
+        <!-- 視窗預設字型 -->
+        <Style Selector="Window">
+            <Setter Property="FontFamily" Value="{StaticResource BodyFont}"/>
+        </Style>
+
+        <!-- 面板/卡片標題：乾淨無襯線粗體（中文適用；方向 B——襯線只保留給拉丁/數字） -->
+        <Style Selector="TextBlock.h">
+            <Setter Property="FontFamily" Value="{StaticResource BodyFont}"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="FontSize" Value="15"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
+        </Style>
+
+        <!-- 工具列按鈕：透明底、hover 暖色、圓角 -->
         <Style Selector="Button.tool">
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
-            <Setter Property="CornerRadius" Value="6"/>
+            <Setter Property="CornerRadius" Value="8"/>
             <Setter Property="Padding" Value="10,6"/>
             <Setter Property="BorderThickness" Value="0"/>
         </Style>
-        <Style Selector="Button.tool:pointerover">
+        <Style Selector="Button.tool:pointerover /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="Background" Value="{DynamicResource SurfaceBrush}"/>
         </Style>
 
-        <!-- 主要動作按鈕：AccentBrush 底、深色字 -->
+        <!-- 主要動作按鈕：赤陶橘底、奶油字 -->
         <Style Selector="Button.primary">
             <Setter Property="Background" Value="{DynamicResource AccentBrush}"/>
-            <Setter Property="Foreground" Value="#1e1e2e"/>
-            <Setter Property="CornerRadius" Value="6"/>
-            <Setter Property="Padding" Value="14,6"/>
+            <Setter Property="Foreground" Value="{DynamicResource CreamTextBrush}"/>
+            <Setter Property="CornerRadius" Value="9"/>
+            <Setter Property="Padding" Value="16,7"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
             <Setter Property="BorderThickness" Value="0"/>
         </Style>
-        <Style Selector="Button.primary:pointerover">
-            <Setter Property="Background" Value="#74c7ec"/>
+        <Style Selector="Button.primary:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="#BB4E20"/>
+            <Setter Property="Foreground" Value="{DynamicResource CreamTextBrush}"/>
         </Style>
         <Style Selector="Button.primary:disabled">
             <Setter Property="Opacity" Value="0.5"/>
@@ -57,46 +84,48 @@
         <Style Selector="Button.view-btn">
             <Setter Property="Background" Value="{DynamicResource OverlayBgBrush}"/>
             <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
-            <Setter Property="CornerRadius" Value="4"/>
+            <Setter Property="CornerRadius" Value="7"/>
             <Setter Property="Padding" Value="8,4"/>
-            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}"/>
             <Setter Property="FontSize" Value="11"/>
             <Setter Property="MinWidth" Value="44"/>
         </Style>
-        <Style Selector="Button.view-btn:pointerover">
+        <Style Selector="Button.view-btn:pointerover /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="Background" Value="{DynamicResource SurfaceBrush}"/>
         </Style>
 
-        <!-- 訊息氣泡 -->
+        <!-- 訊息氣泡：使用者紫、助手沙、大圓角帶尾巴 -->
         <Style Selector="Border.msg-user">
             <Setter Property="Background" Value="{DynamicResource Surface1Brush}"/>
-            <Setter Property="CornerRadius" Value="10"/>
-            <Setter Property="Padding" Value="10,6"/>
+            <Setter Property="CornerRadius" Value="14,14,4,14"/>
+            <Setter Property="Padding" Value="12,8"/>
             <Setter Property="HorizontalAlignment" Value="Right"/>
             <Setter Property="MaxWidth" Value="260"/>
         </Style>
         <Style Selector="Border.msg-assistant">
             <Setter Property="Background" Value="{DynamicResource SurfaceBrush}"/>
-            <Setter Property="CornerRadius" Value="10"/>
-            <Setter Property="Padding" Value="10,6"/>
+            <Setter Property="CornerRadius" Value="14,14,14,4"/>
+            <Setter Property="Padding" Value="12,8"/>
             <Setter Property="HorizontalAlignment" Value="Left"/>
             <Setter Property="MaxWidth" Value="260"/>
         </Style>
         <Style Selector="Border.msg-error">
-            <Setter Property="Background" Value="{DynamicResource SurfaceBrush}"/>
-            <Setter Property="CornerRadius" Value="10"/>
-            <Setter Property="Padding" Value="10,6"/>
+            <Setter Property="Background" Value="#1FB23B22"/>
+            <Setter Property="CornerRadius" Value="6,14,14,6"/>
+            <Setter Property="Padding" Value="12,8"/>
             <Setter Property="BorderBrush" Value="{DynamicResource ErrorBrush}"/>
-            <Setter Property="BorderThickness" Value="3,0,0,0"/>
+            <Setter Property="BorderThickness" Value="4,0,0,0"/>
             <Setter Property="HorizontalAlignment" Value="Left"/>
             <Setter Property="MaxWidth" Value="260"/>
         </Style>
+        <!-- 計畫/差異卡片：奶油底、赤陶橘左緣 -->
         <Style Selector="Border.msg-plan">
-            <Setter Property="Background" Value="{DynamicResource SurfaceBrush}"/>
-            <Setter Property="CornerRadius" Value="10"/>
-            <Setter Property="Padding" Value="12,8"/>
+            <Setter Property="Background" Value="{DynamicResource MantleBrush}"/>
+            <Setter Property="CornerRadius" Value="6,14,14,14"/>
+            <Setter Property="Padding" Value="14,10"/>
             <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
-            <Setter Property="BorderThickness" Value="1,0,0,0"/>
+            <Setter Property="BorderThickness" Value="4,0,0,0"/>
             <Setter Property="HorizontalAlignment" Value="Stretch"/>
         </Style>
     </Application.Styles>

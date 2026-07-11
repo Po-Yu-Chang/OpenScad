@@ -20,77 +20,80 @@
     <!-- 根佈局：工具列 + 主體 + 狀態列 -->
     <Grid RowDefinitions="Auto,*,Auto">
 
-        <!-- ═══ 工具列 ═══ -->
-        <Border Grid.Row="0" Background="{DynamicResource MantleBrush}" Padding="8,4">
-            <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,*,Auto,Auto,Auto,Auto,Auto">
-                <!-- 檔案選單 -->
-                <Menu Grid.Column="0" Background="Transparent">
-                    <MenuItem Header="檔案" Foreground="{DynamicResource TextBrush}">
-                        <MenuItem Header="開啟專案" Command="{Binding OpenProjectCommand}" ToolTip.Tip="列出已存專案" />
-                        <MenuItem Header="儲存專案" Command="{Binding SaveProjectCommand}" IsEnabled="False" ToolTip.Tip="Phase 1 實作" />
-                        <Separator />
-                        <MenuItem Header="LLM 設定…" Command="{Binding OpenLlmSettingsCommand}" ToolTip.Tip="設定 OpenAI-compatible 端點（LiteLLM／Ollama）" />
-                        <MenuItem Header="重新偵測 LLM" Command="{Binding RedetectLlmCommand}" ToolTip.Tip="修改設定檔後重新連線" />
-                    </MenuItem>
-                </Menu>
+        <!-- ═══ 工具列 ═══ 左群組（可橫向捲動，不再疊欄）＋ 右群組（固定靠右） -->
+        <Border Grid.Row="0" Background="{DynamicResource MantleBrush}"
+                BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1" Padding="10,5">
+            <Grid ColumnDefinitions="*,Auto,Auto">
 
-                <!-- 載入範例 -->
-                <Menu Grid.Column="1" Background="Transparent" Margin="8,0,0,0">
-                    <MenuItem Header="載入範例▾" Foreground="{DynamicResource TextBrush}">
-                        <MenuItem Header="NEMA17 馬達座" Command="{Binding LoadExampleCommand}" CommandParameter="nema17-mount" />
-                        <MenuItem Header="針盒收納盒 5×10" Command="{Binding LoadExampleCommand}" CommandParameter="needle-box-5x10" />
-                        <MenuItem Header="ESP32-CAM 外殼" Command="{Binding LoadExampleCommand}" CommandParameter="esp32cam-enclosure" />
-                    </MenuItem>
-                </Menu>
+                <!-- 左群組 -->
+                <ScrollViewer Grid.Column="0" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                    <StackPanel Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
+                        <!-- 檔案選單 -->
+                        <Menu Background="Transparent">
+                            <MenuItem Header="檔案" Foreground="{DynamicResource TextBrush}">
+                                <MenuItem Header="開啟專案" Command="{Binding OpenProjectCommand}" ToolTip.Tip="列出已存專案" />
+                                <MenuItem Header="儲存專案" Command="{Binding SaveProjectCommand}" IsEnabled="False" ToolTip.Tip="Phase 1 實作" />
+                                <Separator />
+                                <MenuItem Header="LLM 設定…" Command="{Binding OpenLlmSettingsCommand}" ToolTip.Tip="設定 OpenAI-compatible 端點（LiteLLM／Ollama）" />
+                                <MenuItem Header="重新偵測 LLM" Command="{Binding RedetectLlmCommand}" ToolTip.Tip="修改設定檔後重新連線" />
+                            </MenuItem>
+                        </Menu>
 
-                <!-- 新增專案 -->
-                <Button Grid.Column="2" Classes="tool" Content="新增專案" Command="{Binding NewProjectCommand}" Margin="8,0,0,0" />
+                        <!-- 載入範例 -->
+                        <Menu Background="Transparent">
+                            <MenuItem Header="載入範例▾" Foreground="{DynamicResource TextBrush}">
+                                <MenuItem Header="NEMA17 馬達座" Command="{Binding LoadExampleCommand}" CommandParameter="nema17-mount" />
+                                <MenuItem Header="針盒收納盒 5×10" Command="{Binding LoadExampleCommand}" CommandParameter="needle-box-5x10" />
+                                <MenuItem Header="ESP32-CAM 外殼" Command="{Binding LoadExampleCommand}" CommandParameter="esp32cam-enclosure" />
+                            </MenuItem>
+                        </Menu>
 
-                <!-- 新增草圖 -->
-                <Button Grid.Column="3" Classes="tool" Content="✏ 草圖" Command="{Binding NewSketchCommand}" Margin="4,0,0,0" ToolTip.Tip="建立新草圖並進入編輯" />
+                        <Border Width="1" Margin="6,5" Background="{DynamicResource BorderBrush}" />
 
-                <!-- WP1-3: 基準面偏移 -->
-                <Button Grid.Column="3" Classes="tool" Content="📐 基準面" Command="{Binding CreateDatumPlaneCommand}" Margin="4,0,0,0" ToolTip.Tip="建立偏移基準面" />
+                        <!-- 建立類 -->
+                        <Button Classes="tool" Content="新增專案" Command="{Binding NewProjectCommand}" />
+                        <Button Classes="tool" Content="✏ 草圖" Command="{Binding NewSketchCommand}" ToolTip.Tip="建立新草圖並進入編輯" />
+                        <Button Classes="tool" Content="📐 基準面" Command="{Binding CreateDatumPlaneCommand}" ToolTip.Tip="建立偏移基準面" />
+                        <Button Classes="tool" Content="📏 量測" Command="{Binding ToggleMeasureCommand}" ToolTip.Tip="量測模式：點兩個面/邊/點顯示距離/角度/半徑" />
 
-                <!-- WP1-4: 量測工具 -->
-                <Button Grid.Column="3" Classes="tool" Content="📏 量測" Command="{Binding ToggleMeasureCommand}" Margin="4,0,0,0" ToolTip.Tip="量測模式：點兩個面/邊/點顯示距離/角度/半徑" />
+                        <!-- 選取過濾器 -->
+                        <Menu Background="Transparent">
+                            <MenuItem Header="🩹 選取" Foreground="{DynamicResource TextBrush}" ToolTip.Tip="選取過濾器">
+                                <MenuItem Header="全部" Command="{Binding SetSelectionFilterCommand}" CommandParameter="{x:Static vm:SelectionFilter.All}" />
+                                <MenuItem Header="面" Command="{Binding SetSelectionFilterCommand}" CommandParameter="{x:Static vm:SelectionFilter.Face}" />
+                                <MenuItem Header="邊" Command="{Binding SetSelectionFilterCommand}" CommandParameter="{x:Static vm:SelectionFilter.Edge}" />
+                                <MenuItem Header="頂點" Command="{Binding SetSelectionFilterCommand}" CommandParameter="{x:Static vm:SelectionFilter.Vertex}" />
+                            </MenuItem>
+                        </Menu>
 
-                <!-- WP1-4: 選取過濾器 -->
-                <Menu Grid.Column="3" Background="Transparent" Margin="4,0,0,0">
-                    <MenuItem Header="🩹 選取" Foreground="{DynamicResource TextBrush}" ToolTip.Tip="選取過濾器">
-                        <MenuItem Header="全部" Command="{Binding SetSelectionFilterCommand}" CommandParameter="{x:Static vm:SelectionFilter.All}" />
-                        <MenuItem Header="面" Command="{Binding SetSelectionFilterCommand}" CommandParameter="{x:Static vm:SelectionFilter.Face}" />
-                        <MenuItem Header="邊" Command="{Binding SetSelectionFilterCommand}" CommandParameter="{x:Static vm:SelectionFilter.Edge}" />
-                        <MenuItem Header="頂點" Command="{Binding SetSelectionFilterCommand}" CommandParameter="{x:Static vm:SelectionFilter.Vertex}" />
-                    </MenuItem>
-                </Menu>
+                        <!-- 顯示模式 -->
+                        <Menu Background="Transparent">
+                            <MenuItem Header="👁 顯示" Foreground="{DynamicResource TextBrush}" ToolTip.Tip="顯示模式">
+                                <MenuItem Header="實體著色" Command="{Binding SetDisplayModeCommand}" CommandParameter="{x:Static vm:DisplayMode.Shaded}" />
+                                <MenuItem Header="著色+邊線" Command="{Binding SetDisplayModeCommand}" CommandParameter="{x:Static vm:DisplayMode.ShadedWithEdges}" />
+                                <MenuItem Header="線框" Command="{Binding SetDisplayModeCommand}" CommandParameter="{x:Static vm:DisplayMode.Wireframe}" />
+                                <MenuItem Header="透明" Command="{Binding SetDisplayModeCommand}" CommandParameter="{x:Static vm:DisplayMode.Transparent}" />
+                            </MenuItem>
+                        </Menu>
 
-                <!-- WP1-4: 顯示模式 -->
-                <Menu Grid.Column="3" Background="Transparent" Margin="4,0,0,0">
-                    <MenuItem Header="👁 顯示" Foreground="{DynamicResource TextBrush}" ToolTip.Tip="顯示模式">
-                        <MenuItem Header="實體著色" Command="{Binding SetDisplayModeCommand}" CommandParameter="{x:Static vm:DisplayMode.Shaded}" />
-                        <MenuItem Header="著色+邊線" Command="{Binding SetDisplayModeCommand}" CommandParameter="{x:Static vm:DisplayMode.ShadedWithEdges}" />
-                        <MenuItem Header="線框" Command="{Binding SetDisplayModeCommand}" CommandParameter="{x:Static vm:DisplayMode.Wireframe}" />
-                        <MenuItem Header="透明" Command="{Binding SetDisplayModeCommand}" CommandParameter="{x:Static vm:DisplayMode.Transparent}" />
-                    </MenuItem>
-                </Menu>
+                    </StackPanel>
+                </ScrollViewer>
 
-                <!-- 重建 -->
-                <Button Grid.Column="4" Classes="primary" Content="重建" Command="{Binding RebuildCommand}" Margin="8,0,0,0" />
+                <!-- 固定群組：重建/復原/重做——常駐可見，不隨左群組捲動 -->
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
+                    <Border Width="1" Margin="6,5" Background="{DynamicResource BorderBrush}" />
+                    <Button Classes="primary" Content="重建" Command="{Binding RebuildCommand}" Margin="2,0" />
+                    <Button Classes="tool" Content="↶ 復原" Command="{Binding UndoCommand}" ToolTip.Tip="Ctrl+Z" />
+                    <Button Classes="tool" Content="↷ 重做" Command="{Binding RedoCommand}" ToolTip.Tip="Ctrl+Y" />
+                </StackPanel>
 
-                <!-- 復原/重做 -->
-                <Button Grid.Column="5" Classes="tool" Content="↶ 復原" Command="{Binding UndoCommand}" Margin="8,0,0,0" ToolTip.Tip="Ctrl+Z" />
-                <Button Grid.Column="6" Classes="tool" Content="↷ 重做" Command="{Binding RedoCommand}" Margin="4,0,0,0" ToolTip.Tip="Ctrl+Y" />
-
-                <!-- 右側動作 -->
-                <Button Grid.Column="8" Classes="tool" Content="匯出 STEP" Command="{Binding ExportCommand}" CommandParameter="step" Margin="0,0,8,0" />
-                <Button Grid.Column="9" Classes="tool" Content="匯出 STL" Command="{Binding ExportCommand}" CommandParameter="stl" Margin="0,0,8,0" />
-
-                <!-- 匯出對話紀錄（供分析 LLM 意圖判斷） -->
-                <Button Grid.Column="10" Classes="tool" Content="💬 匯出對話" Command="{Binding ExportChatCommand}" Margin="0,0,8,0" ToolTip.Tip="將聊天紀錄匯出為 Markdown，方便分析 LLM 意圖判斷效果" />
-
-                <!-- 收合右欄 -->
-                <Button Grid.Column="11" Classes="tool" Content="⚙" Command="{Binding ToggleRightPanelCommand}" ToolTip.Tip="開啟／收合對話窗格（輸入框在此欄）" />
+                <!-- 右群組：固定靠右 -->
+                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center" Margin="8,0,0,0">
+                    <Button Classes="tool" Content="匯出 STEP" Command="{Binding ExportCommand}" CommandParameter="step" />
+                    <Button Classes="tool" Content="匯出 STL" Command="{Binding ExportCommand}" CommandParameter="stl" />
+                    <Button Classes="tool" Content="💬 匯出對話" Command="{Binding ExportChatCommand}" ToolTip.Tip="將聊天紀錄匯出為 Markdown，方便分析 LLM 意圖判斷效果" />
+                    <Button Classes="tool" Content="⚙" Command="{Binding ToggleRightPanelCommand}" ToolTip.Tip="開啟／收合對話窗格（輸入框在此欄）" />
+                </StackPanel>
             </Grid>
         </Border>
 
@@ -101,7 +104,7 @@
             <Grid Grid.Column="0" RowDefinitions="*,4,*" Background="{DynamicResource MantleBrush}">
                 <Border Grid.Row="0" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,1,0">
                     <Grid RowDefinitions="Auto,*">
-                        <TextBlock Grid.Row="0" Text="特徵樹" FontWeight="Bold" Foreground="{DynamicResource TextBrush}" Margin="12,8,0,4" />
+                        <TextBlock Grid.Row="0" Classes="h" Text="特徵樹" Margin="12,8,0,4" />
                         <TreeView Grid.Row="1" ItemsSource="{Binding FeatureTree}"
                                   SelectedItem="{Binding SelectedFeature}"
                                   Margin="8,0,8,8"
@@ -141,7 +144,7 @@
 
                 <Border Grid.Row="2" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,1,0">
                     <Grid RowDefinitions="Auto,Auto,Auto,*">
-                        <TextBlock Grid.Row="0" Text="參數面板" FontWeight="Bold" Foreground="{DynamicResource TextBrush}" Margin="12,8,0,4" />
+                        <TextBlock Grid.Row="0" Classes="h" Text="參數面板" Margin="12,8,0,4" />
                         <Button Grid.Row="1" Classes="tool" Content="✏ 編輯草圖" Command="{Binding EditSketchCommand}"
                                 Margin="12,0,12,4" IsVisible="{Binding CanEditSketch}"
                                 HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
@@ -232,7 +235,7 @@
                                         <!-- Plan 計畫卡片 -->
                                         <Border Classes="msg-plan" IsVisible="{Binding Kind, Converter={x:Static vm:MessageKindToVisibilityConverter.PlanIsVisible}}">
                                             <StackPanel Spacing="6">
-                                                <TextBlock Text="建模計畫" FontWeight="Bold" Foreground="{DynamicResource AccentBrush}" />
+                                                <TextBlock Classes="h" Text="建模計畫" Foreground="{DynamicResource AccentBrush}" />
                                                 <TextBlock Text="{Binding Text}" Foreground="{DynamicResource TextBrush}" TextWrapping="Wrap" />
                                                 <!-- 步驟清單 -->
                                                 <ItemsControl ItemsSource="{Binding Plan.Steps}" Margin="0,4,0,0">
@@ -265,7 +268,7 @@
                                         <!-- Diff 修改差異卡片 -->
                                         <Border Classes="msg-plan" IsVisible="{Binding Kind, Converter={x:Static vm:MessageKindToVisibilityConverter.DiffIsVisible}}">
                                             <StackPanel Spacing="6">
-                                                <TextBlock Text="修改差異" FontWeight="Bold" Foreground="{DynamicResource AccentBrush}" />
+                                                <TextBlock Classes="h" Text="修改差異" Foreground="{DynamicResource AccentBrush}" />
                                                 <TextBlock Text="{Binding Text}" Foreground="{DynamicResource TextBrush}" TextWrapping="Wrap" FontSize="12" />
                                                 <!-- 特徵 ID -->
                                                 <TextBlock Foreground="{DynamicResource SubtextBrush}" FontSize="11"
