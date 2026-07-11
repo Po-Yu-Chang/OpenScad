@@ -299,6 +299,58 @@ public class CadWorkerClient : ICadWorker
     }
 
     /// <summary>
+    /// 將專案改名。
+    /// </summary>
+    public async Task<bool> RenameProjectAsync(string projectId, string name)
+    {
+        var json = JsonSerializer.Serialize(new { name }, JsonOpts);
+        var content = new StringContent(json, Encoding.UTF8, "application/json");
+        var response = await _httpClient.PatchAsync($"/api/projects/{projectId}", content);
+        return response.IsSuccessStatusCode;
+    }
+
+    /// <summary>
+    /// 刪除專案（記憶體＋磁碟）。
+    /// </summary>
+    public async Task<bool> DeleteProjectAsync(string projectId)
+    {
+        var response = await _httpClient.DeleteAsync($"/api/projects/{projectId}");
+        return response.IsSuccessStatusCode;
+    }
+
+    /// <summary>
+    /// 複製專案，回傳新專案 ID（失敗回 null）。
+    /// </summary>
+    public async Task<string?> DuplicateProjectAsync(string projectId)
+    {
+        var response = await _httpClient.PostAsync($"/api/projects/{projectId}/duplicate", null);
+        if (!response.IsSuccessStatusCode) return null;
+        var body = await response.Content.ReadAsStringAsync();
+        var result = JsonSerializer.Deserialize<JsonElement>(body);
+        return result.GetProperty("project_id").GetString();
+    }
+
+    /// <summary>
+    /// 上傳 3D 縮圖（PNG bytes，由 viewer 擷取）。
+    /// </summary>
+    public async Task<bool> UploadThumbnailAsync(string projectId, byte[] pngBytes)
+    {
+        var content = new ByteArrayContent(pngBytes);
+        content.Headers.ContentType = new MediaTypeHeaderValue("image/png");
+        var response = await _httpClient.PostAsync($"/api/projects/{projectId}/thumbnail", content);
+        return response.IsSuccessStatusCode;
+    }
+
+    /// <summary>
+    /// 取得縮圖 URL（內含短時效預簽 token，比照 preview.glb）。
+    /// </summary>
+    public async Task<string> GetThumbnailUrlAsync(string projectId)
+    {
+        var token = await GetPresignedTokenAsync();
+        return $"{_httpClient.BaseAddress}api/projects/{projectId}/thumbnail.png?token={token}&t={_rebuildCount}";
+    }
+
+    /// <summary>
     /// 復原到上一版。
     /// </summary>
     public async Task<bool> UndoAsync(string projectId)

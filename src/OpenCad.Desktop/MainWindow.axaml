@@ -28,51 +28,50 @@
                 <!-- 左群組 -->
                 <ScrollViewer Grid.Column="0" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
                     <StackPanel Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
-                        <!-- 檔案選單 -->
+                        <!-- 專案切換器：顯示目前專案，下拉可回首頁／新專案／設定 -->
                         <Menu Background="Transparent">
-                            <MenuItem Header="檔案" Foreground="{DynamicResource TextBrush}">
-                                <MenuItem Header="開啟專案" Command="{Binding OpenProjectCommand}" ToolTip.Tip="列出已存專案" />
-                                <MenuItem Header="儲存專案" Command="{Binding SaveProjectCommand}" IsEnabled="False" ToolTip.Tip="Phase 1 實作" />
+                            <MenuItem Foreground="{DynamicResource TextBrush}" ToolTip.Tip="專案切換">
+                                <MenuItem.Header>
+                                    <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
+                                        <TextBlock Text="✛" Foreground="{DynamicResource AccentBrush}" FontSize="14" />
+                                        <TextBlock Text="{Binding CurrentProjectName}" Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold" />
+                                        <TextBlock Text="▾" Foreground="{DynamicResource SubtextBrush}" FontSize="11" />
+                                    </StackPanel>
+                                </MenuItem.Header>
+                                <MenuItem Header="🏠 開啟／首頁" Command="{Binding ShowStartPageCommand}" ToolTip.Tip="顯示專案縮圖首頁" />
+                                <MenuItem Header="＋ 新專案" Command="{Binding NewProjectCommand}" />
+                                <MenuItem Header="↻ 重新整理清單" Command="{Binding RefreshProjectListCommand}" />
                                 <Separator />
                                 <MenuItem Header="LLM 設定…" Command="{Binding OpenLlmSettingsCommand}" ToolTip.Tip="設定 OpenAI-compatible 端點（LiteLLM／Ollama）" />
                                 <MenuItem Header="重新偵測 LLM" Command="{Binding RedetectLlmCommand}" ToolTip.Tip="修改設定檔後重新連線" />
                             </MenuItem>
                         </Menu>
 
-                        <!-- 載入範例 -->
-                        <Menu Background="Transparent">
-                            <MenuItem Header="載入範例▾" Foreground="{DynamicResource TextBrush}">
-                                <MenuItem Header="NEMA17 馬達座" Command="{Binding LoadExampleCommand}" CommandParameter="nema17-mount" />
-                                <MenuItem Header="針盒收納盒 5×10" Command="{Binding LoadExampleCommand}" CommandParameter="needle-box-5x10" />
-                                <MenuItem Header="ESP32-CAM 外殼" Command="{Binding LoadExampleCommand}" CommandParameter="esp32cam-enclosure" />
-                            </MenuItem>
-                        </Menu>
-
                         <Border Width="1" Margin="6,5" Background="{DynamicResource BorderBrush}" />
 
                         <!-- 建立類 -->
-                        <Button Classes="tool" Content="新增專案" Command="{Binding NewProjectCommand}" />
                         <Button Classes="tool" Content="✏ 草圖" Command="{Binding NewSketchCommand}" ToolTip.Tip="建立新草圖並進入編輯" />
                         <Button Classes="tool" Content="📐 基準面" Command="{Binding CreateDatumPlaneCommand}" ToolTip.Tip="建立偏移基準面" />
-                        <Button Classes="tool" Content="📏 量測" Command="{Binding ToggleMeasureCommand}" ToolTip.Tip="量測模式：點兩個面/邊/點顯示距離/角度/半徑" />
 
-                        <!-- 選取過濾器 -->
-                        <Menu Background="Transparent">
-                            <MenuItem Header="🩹 選取" Foreground="{DynamicResource TextBrush}" ToolTip.Tip="選取過濾器">
-                                <MenuItem Header="全部" Command="{Binding SetSelectionFilterCommand}" CommandParameter="{x:Static vm:SelectionFilter.All}" />
-                                <MenuItem Header="面" Command="{Binding SetSelectionFilterCommand}" CommandParameter="{x:Static vm:SelectionFilter.Face}" />
-                                <MenuItem Header="邊" Command="{Binding SetSelectionFilterCommand}" CommandParameter="{x:Static vm:SelectionFilter.Edge}" />
-                                <MenuItem Header="頂點" Command="{Binding SetSelectionFilterCommand}" CommandParameter="{x:Static vm:SelectionFilter.Vertex}" />
-                            </MenuItem>
-                        </Menu>
+                        <Border Width="1" Margin="6,5" Background="{DynamicResource BorderBrush}" />
 
-                        <!-- 顯示模式 -->
+                        <!-- 工具：量測／選取過濾／顯示模式 併入單一選單 -->
                         <Menu Background="Transparent">
-                            <MenuItem Header="👁 顯示" Foreground="{DynamicResource TextBrush}" ToolTip.Tip="顯示模式">
-                                <MenuItem Header="實體著色" Command="{Binding SetDisplayModeCommand}" CommandParameter="{x:Static vm:DisplayMode.Shaded}" />
-                                <MenuItem Header="著色+邊線" Command="{Binding SetDisplayModeCommand}" CommandParameter="{x:Static vm:DisplayMode.ShadedWithEdges}" />
-                                <MenuItem Header="線框" Command="{Binding SetDisplayModeCommand}" CommandParameter="{x:Static vm:DisplayMode.Wireframe}" />
-                                <MenuItem Header="透明" Command="{Binding SetDisplayModeCommand}" CommandParameter="{x:Static vm:DisplayMode.Transparent}" />
+                            <MenuItem Header="🔧 工具" Foreground="{DynamicResource TextBrush}" ToolTip.Tip="量測／選取過濾／顯示模式">
+                                <MenuItem Header="📏 量測模式" Command="{Binding ToggleMeasureCommand}" ToolTip.Tip="點兩個面/邊/點顯示距離/角度/半徑" />
+                                <Separator />
+                                <MenuItem Header="🩹 選取過濾">
+                                    <MenuItem Header="全部" Command="{Binding SetSelectionFilterCommand}" CommandParameter="{x:Static vm:SelectionFilter.All}" />
+                                    <MenuItem Header="面" Command="{Binding SetSelectionFilterCommand}" CommandParameter="{x:Static vm:SelectionFilter.Face}" />
+                                    <MenuItem Header="邊" Command="{Binding SetSelectionFilterCommand}" CommandParameter="{x:Static vm:SelectionFilter.Edge}" />
+                                    <MenuItem Header="頂點" Command="{Binding SetSelectionFilterCommand}" CommandParameter="{x:Static vm:SelectionFilter.Vertex}" />
+                                </MenuItem>
+                                <MenuItem Header="👁 顯示模式">
+                                    <MenuItem Header="實體著色" Command="{Binding SetDisplayModeCommand}" CommandParameter="{x:Static vm:DisplayMode.Shaded}" />
+                                    <MenuItem Header="著色+邊線" Command="{Binding SetDisplayModeCommand}" CommandParameter="{x:Static vm:DisplayMode.ShadedWithEdges}" />
+                                    <MenuItem Header="線框" Command="{Binding SetDisplayModeCommand}" CommandParameter="{x:Static vm:DisplayMode.Wireframe}" />
+                                    <MenuItem Header="透明" Command="{Binding SetDisplayModeCommand}" CommandParameter="{x:Static vm:DisplayMode.Transparent}" />
+                                </MenuItem>
                             </MenuItem>
                         </Menu>
 
@@ -89,9 +88,14 @@
 
                 <!-- 右群組：固定靠右 -->
                 <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center" Margin="8,0,0,0">
-                    <Button Classes="tool" Content="匯出 STEP" Command="{Binding ExportCommand}" CommandParameter="step" />
-                    <Button Classes="tool" Content="匯出 STL" Command="{Binding ExportCommand}" CommandParameter="stl" />
-                    <Button Classes="tool" Content="💬 匯出對話" Command="{Binding ExportChatCommand}" ToolTip.Tip="將聊天紀錄匯出為 Markdown，方便分析 LLM 意圖判斷效果" />
+                    <Menu Background="Transparent">
+                        <MenuItem Header="⬇ 匯出" Foreground="{DynamicResource TextBrush}" ToolTip.Tip="匯出模型或對話">
+                            <MenuItem Header="STEP（實體）" Command="{Binding ExportCommand}" CommandParameter="step" />
+                            <MenuItem Header="STL（網格）" Command="{Binding ExportCommand}" CommandParameter="stl" />
+                            <Separator />
+                            <MenuItem Header="💬 對話紀錄（Markdown）" Command="{Binding ExportChatCommand}" ToolTip.Tip="將聊天紀錄匯出為 Markdown，方便分析 LLM 意圖判斷效果" />
+                        </MenuItem>
+                    </Menu>
                     <Button Classes="tool" Content="⚙" Command="{Binding ToggleRightPanelCommand}" ToolTip.Tip="開啟／收合對話窗格（輸入框在此欄）" />
                 </StackPanel>
             </Grid>
@@ -330,6 +334,124 @@
             </Border>
         </Grid>
 
+        <!-- ═══ 啟動首頁：覆蓋主體，無專案或按「首頁」時顯示 ═══ -->
+        <Border Grid.Row="1" Background="{DynamicResource BaseBrush}" IsVisible="{Binding IsStartPageVisible}">
+            <Grid RowDefinitions="Auto,Auto,*" MaxWidth="1040" Margin="36,24,36,12">
+
+                <!-- 標題 -->
+                <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="12" Margin="4,8,0,4">
+                    <TextBlock Text="✛" FontSize="32" Foreground="{DynamicResource AccentBrush}" VerticalAlignment="Center" />
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="OpenCad" Classes="h" FontSize="26" />
+                        <TextBlock Text="全本地 LLM 原生參數化機械 CAD" Foreground="{DynamicResource SubtextBrush}" FontSize="12" />
+                    </StackPanel>
+                </StackPanel>
+
+                <!-- 動作列 -->
+                <Grid Grid.Row="1" ColumnDefinitions="Auto,Auto,*,Auto" Margin="4,18,4,10">
+                    <Button Grid.Column="0" Classes="primary" Content="＋ 新專案" Command="{Binding NewProjectCommand}" Margin="0,0,8,0" />
+                    <Menu Grid.Column="1" Background="Transparent" VerticalAlignment="Center">
+                        <MenuItem Header="載入範例 ▾" Foreground="{DynamicResource TextBrush}">
+                            <MenuItem Header="NEMA17 馬達座" Command="{Binding LoadExampleCommand}" CommandParameter="nema17-mount" />
+                            <MenuItem Header="針盒收納盒 5×10" Command="{Binding LoadExampleCommand}" CommandParameter="needle-box-5x10" />
+                            <MenuItem Header="ESP32-CAM 外殼" Command="{Binding LoadExampleCommand}" CommandParameter="esp32cam-enclosure" />
+                        </MenuItem>
+                    </Menu>
+                    <Button Grid.Column="3" Classes="tool" Content="↻ 重新整理" Command="{Binding RefreshProjectListCommand}" />
+                </Grid>
+
+                <!-- 專案網格 -->
+                <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
+                    <StackPanel>
+                        <TextBlock Text="最近的專案" Classes="h" FontSize="14" Margin="6,4,0,8" />
+                        <TextBlock Text="尚無專案——點「＋ 新專案」或「載入範例」開始。"
+                                   Foreground="{DynamicResource SubtextBrush}" Margin="6,8" FontSize="13"
+                                   IsVisible="{Binding RecentProjects.Count, Converter={x:Static vm:IntIsZeroConverter.Instance}}" />
+                        <ItemsControl ItemsSource="{Binding RecentProjects}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <WrapPanel Orientation="Horizontal" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Classes="proj-card">
+                                        <Grid>
+                                            <!-- 一般狀態：縮圖＋資訊＋動作 -->
+                                            <StackPanel IsVisible="{Binding IsNormal}">
+                                                <Button Classes="card-open"
+                                                        Command="{Binding $parent[ItemsControl].DataContext.OpenProjectFromSummaryCommand}"
+                                                        CommandParameter="{Binding}"
+                                                        ToolTip.Tip="開啟此專案">
+                                                    <StackPanel>
+                                                        <!-- 縮圖區 -->
+                                                        <Panel Height="128">
+                                                            <Border Background="{DynamicResource CrustBrush}" CornerRadius="12,12,0,0" />
+                                                            <Image Source="{Binding Thumbnail}" Stretch="UniformToFill"
+                                                                   IsVisible="{Binding HasThumbnailImage}" />
+                                                            <TextBlock Text="{Binding Initial}" FontSize="46" FontWeight="Bold"
+                                                                       Foreground="{DynamicResource OverlayBrush}"
+                                                                       HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                                       IsVisible="{Binding !HasThumbnailImage}" />
+                                                        </Panel>
+                                                        <!-- 資訊 -->
+                                                        <StackPanel Margin="12,8,12,4" Spacing="2">
+                                                            <TextBlock Text="{Binding Name}" Foreground="{DynamicResource TextBrush}"
+                                                                       FontWeight="SemiBold" FontSize="13" TextTrimming="CharacterEllipsis" />
+                                                            <StackPanel Orientation="Horizontal" Spacing="10">
+                                                                <TextBlock Text="{Binding FeatureCountText}" Foreground="{DynamicResource SubtextBrush}" FontSize="11" />
+                                                                <TextBlock Text="{Binding ModifiedRelative}" Foreground="{DynamicResource SubtextBrush}" FontSize="11" />
+                                                            </StackPanel>
+                                                        </StackPanel>
+                                                    </StackPanel>
+                                                </Button>
+                                                <!-- 動作列 -->
+                                                <StackPanel Orientation="Horizontal" Spacing="2" Margin="8,0,8,8" HorizontalAlignment="Right">
+                                                    <Button Classes="card-act" Content="改名"
+                                                            Command="{Binding $parent[ItemsControl].DataContext.BeginRenameCommand}" CommandParameter="{Binding}" />
+                                                    <Button Classes="card-act" Content="複製"
+                                                            Command="{Binding $parent[ItemsControl].DataContext.DuplicateProjectCommand}" CommandParameter="{Binding}" />
+                                                    <Button Classes="card-act" Content="刪除"
+                                                            Command="{Binding $parent[ItemsControl].DataContext.BeginDeleteCommand}" CommandParameter="{Binding}" />
+                                                </StackPanel>
+                                            </StackPanel>
+
+                                            <!-- 改名狀態 -->
+                                            <StackPanel IsVisible="{Binding IsRenaming}" Margin="12" Spacing="8" MinHeight="180">
+                                                <TextBlock Text="重新命名" Foreground="{DynamicResource SubtextBrush}" FontSize="11" />
+                                                <TextBox Text="{Binding EditName}" Watermark="專案名稱"
+                                                         Background="{DynamicResource BaseBrush}" BorderBrush="{DynamicResource BorderBrush}"
+                                                         Foreground="{DynamicResource TextBrush}" Padding="6" />
+                                                <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Right">
+                                                    <Button Classes="primary" Content="確定"
+                                                            Command="{Binding $parent[ItemsControl].DataContext.CommitRenameCommand}" CommandParameter="{Binding}" />
+                                                    <Button Classes="tool" Content="取消"
+                                                            Command="{Binding $parent[ItemsControl].DataContext.CancelCardActionCommand}" CommandParameter="{Binding}" />
+                                                </StackPanel>
+                                            </StackPanel>
+
+                                            <!-- 刪除確認狀態 -->
+                                            <StackPanel IsVisible="{Binding IsConfirmingDelete}" Margin="12" Spacing="8" MinHeight="180" VerticalAlignment="Center">
+                                                <TextBlock Text="{Binding Name, StringFormat='確定刪除「{0}」？'}" TextWrapping="Wrap" Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold" />
+                                                <TextBlock Text="此動作無法復原。" Foreground="{DynamicResource ErrorBrush}" FontSize="11" />
+                                                <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Right">
+                                                    <Button Content="刪除" Foreground="{DynamicResource CreamTextBrush}" Background="{DynamicResource ErrorBrush}"
+                                                            CornerRadius="8" Padding="14,6" FontWeight="SemiBold"
+                                                            Command="{Binding $parent[ItemsControl].DataContext.ConfirmDeleteCommand}" CommandParameter="{Binding}" />
+                                                    <Button Classes="tool" Content="取消"
+                                                            Command="{Binding $parent[ItemsControl].DataContext.CancelCardActionCommand}" CommandParameter="{Binding}" />
+                                                </StackPanel>
+                                            </StackPanel>
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </ScrollViewer>
+            </Grid>
+        </Border>
+
         <!-- ═══ 狀態列 ═══ -->
         <Border Grid.Row="2" Background="{DynamicResource CrustBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0" Padding="12,4">
             <StackPanel Orientation="Horizontal" Spacing="16">
@@ -345,6 +467,9 @@
                            IsVisible="{Binding MassInfoText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                 <TextBlock Text="⏳ 重建中…" Foreground="{DynamicResource WarningBrush}" FontFamily="Consolas" FontSize="11"
                            IsVisible="{Binding IsBusy}" />
+                <!-- 自動儲存指示：取代原本誤導的停用「儲存專案」（後端本就有 revisions/journal 自動存檔） -->
+                <TextBlock Text="✓ 已自動儲存" Foreground="{DynamicResource SuccessBrush}" FontFamily="Consolas" FontSize="11"
+                           IsVisible="{Binding HasProject}" />
             </StackPanel>
         </Border>
     </Grid>

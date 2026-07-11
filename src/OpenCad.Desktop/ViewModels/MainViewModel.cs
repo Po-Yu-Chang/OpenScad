@@ -44,6 +44,9 @@ public class MainViewModel : INotifyPropertyChanged
     public ObservableCollection<FeatureNode> FeatureTree { get; } = new();
     public ObservableCollection<ParameterItem> SelectedFeatureParameters { get; } = new();
 
+    /// <summary>啟動首頁與工具列切換器共用的專案清單（最近修改在前）。</summary>
+    public ObservableCollection<ProjectSummary> RecentProjects { get; } = new();
+
     // WP1-4: 量測結果
     public ObservableCollection<MeasurementResult> Measurements { get; } = new();
 
@@ -190,6 +193,22 @@ public class MainViewModel : INotifyPropertyChanged
 
     public bool HasProject => !string.IsNullOrEmpty(_projectId);
 
+    private bool _isStartPageVisible = true;
+    /// <summary>啟動首頁是否顯示（無專案時預設顯示；開啟/建立專案後隱藏）。</summary>
+    public bool IsStartPageVisible
+    {
+        get => _isStartPageVisible;
+        set { _isStartPageVisible = value; OnPropertyChanged(); }
+    }
+
+    private string _currentProjectName = "未開啟專案";
+    /// <summary>目前開啟的專案名稱——工具列切換器顯示。</summary>
+    public string CurrentProjectName
+    {
+        get => _currentProjectName;
+        set { _currentProjectName = value; OnPropertyChanged(); }
+    }
+
     private bool _canEditSketch;
     public bool CanEditSketch
     {
@@ -241,10 +260,26 @@ public class MainViewModel : INotifyPropertyChanged
     public ICommand SetSelectionFilterCommand { get; }
     public ICommand SetDisplayModeCommand { get; }
 
+    // 專案管理：啟動首頁 + 切換器
+    public ICommand ShowStartPageCommand { get; }
+    public ICommand RefreshProjectListCommand { get; }
+    public ICommand OpenProjectFromSummaryCommand { get; }
+    public ICommand DuplicateProjectCommand { get; }
+    public ICommand BeginRenameCommand { get; }
+    public ICommand CommitRenameCommand { get; }
+    public ICommand BeginDeleteCommand { get; }
+    public ICommand ConfirmDeleteCommand { get; }
+    public ICommand CancelCardActionCommand { get; }
+
     /// <summary>
     /// 當 ViewModel 需要在 3D 視窗中執行 JavaScript 時觸發。
     /// </summary>
     public event Action<string>? ViewerScriptRequested;
+
+    /// <summary>
+    /// 在 3D 視窗執行 JS 並取回結果（縮圖擷取用）。由 MainWindow 掛上 WebView.ExecuteScriptAsync。
+    /// </summary>
+    public event Func<string, Task<string?>>? ViewerScriptEvaluateRequested;
 
     public MainViewModel(ICadWorker? worker = null, CadWorkerClient? workerClient = null)
     {
@@ -287,6 +322,17 @@ public class MainViewModel : INotifyPropertyChanged
         ShowAllFeaturesCommand = new AsyncRelayCommand(ShowAllFeaturesAsync, () => IsWorkerConnected);
         SetSelectionFilterCommand = new RelayCommand<SelectionFilter>(f => SelectionFilter = f);
         SetDisplayModeCommand = new RelayCommand<DisplayMode>(m => DisplayModeProp = m);
+
+        // 專案管理命令
+        ShowStartPageCommand = new AsyncRelayCommand(ShowStartPageAsync, () => IsWorkerConnected);
+        RefreshProjectListCommand = new AsyncRelayCommand(LoadProjectListAsync, () => IsWorkerConnected);
+        OpenProjectFromSummaryCommand = new AsyncRelayCommand<ProjectSummary>(OpenProjectFromSummaryAsync, p => IsWorkerConnected);
+        DuplicateProjectCommand = new AsyncRelayCommand<ProjectSummary>(DuplicateProjectFromSummaryAsync, p => IsWorkerConnected);
+        BeginRenameCommand = new RelayCommand<ProjectSummary>(BeginRename);
+        CommitRenameCommand = new AsyncRelayCommand<ProjectSummary>(CommitRenameAsync, p => IsWorkerConnected);
+        BeginDeleteCommand = new RelayCommand<ProjectSummary>(p => { if (p != null) p.IsConfirmingDelete = true; });
+        ConfirmDeleteCommand = new AsyncRelayCommand<ProjectSummary>(ConfirmDeleteAsync, p => IsWorkerConnected);
+        CancelCardActionCommand = new RelayCommand<ProjectSummary>(p => { if (p != null) { p.IsRenaming = false; p.IsConfirmingDelete = false; } });
 
         // 歡迎訊息
         Messages.Add(ChatMessage.Assistant(
@@ -335,6 +381,9 @@ public class MainViewModel : INotifyPropertyChanged
             var healthy = await _worker.CheckHealthAsync();
             IsWorkerConnected = healthy;
             WorkerStatus = healthy ? "Worker：已連線" : "Worker：未連線";
+            // 連線後載入專案清單，讓啟動首頁有內容
+            if (healthy)
+                await LoadProjectListAsync();
         }
         catch
         {
@@ -430,7 +479,8 @@ public class MainViewModel : INotifyPropertyChanged
         try
         {
             IsBusy = true;
-            _projectId = await _worker.CreateProjectAsync("新專案");
+            var newId = await _worker.CreateProjectAsync("新專案");
+            SetActiveProject(newId, "新專案");
             FeatureTree.Clear();
             ClearHistory();
             HasModel = false;
@@ -454,7 +504,7 @@ public class MainViewModel : INotifyPropertyChanged
     /// <summary>
     /// 以專案 ID 開啟既有專案：載入 graph、重建、刷新特徵樹與 3D 顯示。
     /// </summary>
-    private async Task OpenProjectByIdAsync(string projectId)
+    private async Task OpenProjectByIdAsync(string projectId, string? name = null)
     {
         if (_worker == null) return;
         try
@@ -462,10 +512,10 @@ public class MainViewModel : INotifyPropertyChanged
             IsBusy = true;
             // 先確認專案存在
             await _worker.GetProjectAsync(projectId);
-            _projectId = projectId;
+            SetActiveProject(projectId, name ?? projectId);
             ClearHistory();
             RefreshCanExecute();
-            Messages.Add(ChatMessage.Assistant($"已開啟專案 {projectId}，重建中…"));
+            Messages.Add(ChatMessage.Assistant($"已開啟專案「{CurrentProjectName}」，重建中…"));
             await RebuildAsync();
         }
         catch (Exception ex)
@@ -476,38 +526,178 @@ public class MainViewModel : INotifyPropertyChanged
         finally { IsBusy = false; }
     }
 
-    private async Task OpenProjectAsync()
+    /// <summary>
+    /// 「開啟專案」/「回首頁」——顯示啟動首頁的縮圖網格（取代舊的「貼 ID 到聊天框」）。
+    /// </summary>
+    private async Task OpenProjectAsync() => await ShowStartPageAsync();
+
+    /// <summary>刷新專案清單並顯示啟動首頁。</summary>
+    private async Task ShowStartPageAsync()
+    {
+        await LoadProjectListAsync();
+        IsStartPageVisible = true;
+    }
+
+    /// <summary>設為目前作用中的專案：記錄 id/名稱、隱藏啟動首頁。</summary>
+    private void SetActiveProject(string id, string name)
+    {
+        _projectId = id;
+        CurrentProjectName = string.IsNullOrWhiteSpace(name) ? "未命名專案" : name;
+        IsStartPageVisible = false;
+    }
+
+    /// <summary>
+    /// 從 Worker 讀取專案清單填入 RecentProjects，並非同步下載縮圖。
+    /// </summary>
+    private async Task LoadProjectListAsync()
     {
         if (_worker == null) return;
         try
         {
-            IsBusy = true;
             var rawJson = await _worker.ListProjectsAsync();
-            var projects = JsonSerializer.Deserialize<JsonElement>(rawJson);
-
-            // 建立選擇清單文字
-            var sb = new System.Text.StringBuilder();
-            sb.AppendLine("可用的專案：");
-            if (projects.TryGetProperty("projects", out var projArr))
+            var doc = JsonSerializer.Deserialize<JsonElement>(rawJson);
+            RecentProjects.Clear();
+            if (doc.TryGetProperty("projects", out var arr))
             {
-                int idx = 1;
-                foreach (var p in projArr.EnumerateArray())
+                foreach (var p in arr.EnumerateArray())
                 {
-                    var name = p.TryGetProperty("name", out var nEl) ? nEl.GetString() ?? "?" : "?";
-                    var count = p.TryGetProperty("feature_count", out var cEl) ? cEl.GetInt32() : 0;
-                    var pid = p.TryGetProperty("project_id", out var idEl) ? idEl.GetString() ?? "" : "";
-                    sb.AppendLine($"  {idx}. {name}（{count} 特徵）— {pid}");
-                    idx++;
+                    var summary = new ProjectSummary
+                    {
+                        Id = p.TryGetProperty("project_id", out var idEl) ? idEl.GetString() ?? "" : "",
+                        Name = p.TryGetProperty("name", out var nEl) ? nEl.GetString() ?? "未命名" : "未命名",
+                        FeatureCount = p.TryGetProperty("feature_count", out var cEl) ? cEl.GetInt32() : 0,
+                        CreatedAt = p.TryGetProperty("created_at", out var caEl) ? caEl.GetString() ?? "" : "",
+                        ModifiedAt = p.TryGetProperty("modified_at", out var mEl) ? mEl.GetString() ?? "" : "",
+                        HasThumbnail = p.TryGetProperty("has_thumbnail", out var hEl) && hEl.GetBoolean(),
+                    };
+                    RecentProjects.Add(summary);
+                    if (summary.HasThumbnail)
+                        _ = LoadThumbnailAsync(summary);  // 背景載入，不阻塞清單顯示
                 }
             }
-            sb.AppendLine("\n請在聊天框輸入專案 ID 以開啟。");
-            Messages.Add(ChatMessage.Assistant(sb.ToString()));
         }
         catch (Exception ex)
         {
-            Messages.Add(ChatMessage.Error($"列出專案失敗：{ex.Message}"));
+            Log.Warning(ex, "載入專案清單失敗");
+            Messages.Add(ChatMessage.Error($"載入專案清單失敗：{ex.Message}"));
+        }
+    }
+
+    /// <summary>下載單一專案縮圖 PNG 並填入 Bitmap（失敗則靜默，UI 顯示 fallback）。</summary>
+    private async Task LoadThumbnailAsync(ProjectSummary summary)
+    {
+        if (_worker == null || string.IsNullOrEmpty(summary.Id)) return;
+        try
+        {
+            var url = await _worker.GetThumbnailUrlAsync(summary.Id);
+            using var http = new System.Net.Http.HttpClient();
+            var bytes = await http.GetByteArrayAsync(url);
+            using var ms = new System.IO.MemoryStream(bytes);
+            var bmp = new Avalonia.Media.Imaging.Bitmap(ms);
+            summary.Thumbnail = bmp;
+        }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "縮圖載入失敗 {Pid}", summary.Id);
+        }
+    }
+
+    /// <summary>從啟動首頁縮圖卡片開啟專案。</summary>
+    private async Task OpenProjectFromSummaryAsync(ProjectSummary? summary)
+    {
+        if (summary == null || string.IsNullOrEmpty(summary.Id)) return;
+        await OpenProjectByIdAsync(summary.Id, summary.Name);
+    }
+
+    /// <summary>複製專案，重新載入清單並選中新複本。</summary>
+    private async Task DuplicateProjectFromSummaryAsync(ProjectSummary? summary)
+    {
+        if (_worker == null || summary == null || string.IsNullOrEmpty(summary.Id)) return;
+        try
+        {
+            IsBusy = true;
+            var newId = await _worker.DuplicateProjectAsync(summary.Id);
+            if (newId == null)
+            {
+                Messages.Add(ChatMessage.Error("複製專案失敗。"));
+                return;
+            }
+            await LoadProjectListAsync();
+        }
+        catch (Exception ex)
+        {
+            Messages.Add(ChatMessage.Error($"複製專案失敗：{ex.Message}"));
         }
         finally { IsBusy = false; }
+    }
+
+    private void BeginRename(ProjectSummary? summary)
+    {
+        if (summary == null) return;
+        summary.EditName = summary.Name;
+        summary.IsConfirmingDelete = false;
+        summary.IsRenaming = true;
+    }
+
+    /// <summary>套用改名（走 PATCH /api/projects/{id}）。</summary>
+    private async Task CommitRenameAsync(ProjectSummary? summary)
+    {
+        if (_worker == null || summary == null) return;
+        var newName = (summary.EditName ?? "").Trim();
+        summary.IsRenaming = false;
+        if (string.IsNullOrEmpty(newName) || newName == summary.Name) return;
+        try
+        {
+            var ok = await _worker.RenameProjectAsync(summary.Id, newName);
+            if (ok)
+            {
+                summary.Name = newName;
+                summary.NotifyNameChanged();
+                // 若改的是目前開啟的專案，同步切換器標題
+                if (summary.Id == _projectId)
+                    CurrentProjectName = newName;
+            }
+            else
+            {
+                Messages.Add(ChatMessage.Error("改名失敗。"));
+            }
+        }
+        catch (Exception ex)
+        {
+            Messages.Add(ChatMessage.Error($"改名失敗：{ex.Message}"));
+        }
+    }
+
+    /// <summary>二次確認後刪除專案（走 DELETE /api/projects/{id}）。</summary>
+    private async Task ConfirmDeleteAsync(ProjectSummary? summary)
+    {
+        if (_worker == null || summary == null) return;
+        summary.IsConfirmingDelete = false;
+        try
+        {
+            var ok = await _worker.DeleteProjectAsync(summary.Id);
+            if (!ok)
+            {
+                Messages.Add(ChatMessage.Error("刪除專案失敗。"));
+                return;
+            }
+            RecentProjects.Remove(summary);
+            // 刪的是目前開啟的專案——清空作用中狀態並回首頁
+            if (summary.Id == _projectId)
+            {
+                _projectId = null;
+                CurrentProjectName = "未開啟專案";
+                FeatureTree.Clear();
+                HasModel = false;
+                ViewerScriptRequested?.Invoke("clearHighlight();");
+                RefreshCanExecute();
+                IsStartPageVisible = true;
+            }
+        }
+        catch (Exception ex)
+        {
+            Messages.Add(ChatMessage.Error($"刪除專案失敗：{ex.Message}"));
+        }
     }
 
     private async Task LoadExampleAsync(string? exampleName)
@@ -538,7 +728,8 @@ public class MainViewModel : INotifyPropertyChanged
             var data = JsonDocument.Parse(json);
 
             // 建立新專案
-            _projectId = await _worker.CreateProjectAsync(exampleName);
+            var exId = await _worker.CreateProjectAsync(exampleName);
+            SetActiveProject(exId, exampleName);
             FeatureTree.Clear();
             ClearHistory();
 
@@ -639,6 +830,9 @@ public class MainViewModel : INotifyPropertyChanged
             // 更新特徵樹
             await UpdateFeatureTreeAsync();
 
+            // 擷取 3D 縮圖並上傳（best-effort，失敗不影響重建）
+            _ = CaptureAndUploadThumbnailAsync(_projectId);
+
             HasModel = true;
             ModelInfoText = report != null
                 ? $"尺寸 {report.SizeX:F0}×{report.SizeY:F0}×{report.SizeZ:F0} mm　體積 {report.Volume:F0} mm³　孔數 {report.HoleCount}"
@@ -664,6 +858,43 @@ public class MainViewModel : INotifyPropertyChanged
             Messages.Add(ChatMessage.Error($"重建失敗：{ex.Message}"));
         }
         finally { IsBusy = false; }
+    }
+
+    /// <summary>
+    /// 擷取 3D 視窗畫面並上傳為專案縮圖（best-effort：失敗只記 debug log，不影響重建）。
+    /// </summary>
+    private async Task CaptureAndUploadThumbnailAsync(string projectId)
+    {
+        var evaluator = ViewerScriptEvaluateRequested;
+        if (evaluator == null || _worker == null) return;
+        try
+        {
+            // 等 viewer 載入 GLB 並渲染後再擷取
+            await Task.Delay(1500);
+            var raw = await evaluator("window.opencadCaptureThumbnail ? window.opencadCaptureThumbnail() : ''");
+            if (string.IsNullOrEmpty(raw)) return;
+
+            // ExecuteScriptAsync 回傳 JSON 字串（外層帶引號）——去引號。
+            // base64 只含 A-Za-z0-9+/=，無引號/反斜線，去外層引號即可。
+            var dataUrl = raw.Trim();
+            if (dataUrl.Length >= 2 && dataUrl[0] == '"' && dataUrl[^1] == '"')
+                dataUrl = dataUrl.Substring(1, dataUrl.Length - 2);
+
+            const string marker = "base64,";
+            var idx = dataUrl.IndexOf(marker, StringComparison.Ordinal);
+            if (idx < 0) return;
+
+            byte[] bytes;
+            try { bytes = Convert.FromBase64String(dataUrl.Substring(idx + marker.Length)); }
+            catch { return; }
+            if (bytes.Length == 0) return;
+
+            await _worker.UploadThumbnailAsync(projectId, bytes);
+        }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "縮圖擷取/上傳失敗");
+        }
     }
 
     /// <summary>
@@ -1061,7 +1292,8 @@ public class MainViewModel : INotifyPropertyChanged
 
             if (_projectId == null && _worker != null)
             {
-                _projectId = await _worker.CreateProjectAsync("AI 建模");
+                var aiId = await _worker.CreateProjectAsync("AI 建模");
+                SetActiveProject(aiId, "AI 建模");
                 RefreshCanExecute();
             }
 
@@ -2787,6 +3019,13 @@ public class MainViewModel : INotifyPropertyChanged
         ((AsyncRelayCommand)IsolateFeatureCommand).RaiseCanExecuteChanged();
         ((AsyncRelayCommand)HideFeatureCommand).RaiseCanExecuteChanged();
         ((AsyncRelayCommand)ShowAllFeaturesCommand).RaiseCanExecuteChanged();
+        ((AsyncRelayCommand)OpenProjectCommand).RaiseCanExecuteChanged();
+        ((AsyncRelayCommand)ShowStartPageCommand).RaiseCanExecuteChanged();
+        ((AsyncRelayCommand)RefreshProjectListCommand).RaiseCanExecuteChanged();
+        ((AsyncRelayCommand<ProjectSummary>)OpenProjectFromSummaryCommand).RaiseCanExecuteChanged();
+        ((AsyncRelayCommand<ProjectSummary>)DuplicateProjectCommand).RaiseCanExecuteChanged();
+        ((AsyncRelayCommand<ProjectSummary>)CommitRenameCommand).RaiseCanExecuteChanged();
+        ((AsyncRelayCommand<ProjectSummary>)ConfirmDeleteCommand).RaiseCanExecuteChanged();
         OnPropertyChanged(nameof(HasProject));
     }
 

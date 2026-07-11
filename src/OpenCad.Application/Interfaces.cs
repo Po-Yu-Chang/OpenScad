@@ -136,6 +136,21 @@ public interface ICadWorker
     /// <summary>取得所有專案列表。</summary>
     Task<string> ListProjectsAsync();
 
+    /// <summary>將專案改名。</summary>
+    Task<bool> RenameProjectAsync(string projectId, string name);
+
+    /// <summary>刪除專案（記憶體＋磁碟）。</summary>
+    Task<bool> DeleteProjectAsync(string projectId);
+
+    /// <summary>複製專案，回傳新專案 ID。</summary>
+    Task<string?> DuplicateProjectAsync(string projectId);
+
+    /// <summary>上傳 3D 縮圖（PNG bytes，由 viewer 擷取）。</summary>
+    Task<bool> UploadThumbnailAsync(string projectId, byte[] pngBytes);
+
+    /// <summary>取得縮圖 URL（內含短時效預簽 token）。無縮圖時前端自行 fallback。</summary>
+    Task<string> GetThumbnailUrlAsync(string projectId);
+
     /// <summary>復原到上一版。</summary>
     Task<bool> UndoAsync(string projectId);
 

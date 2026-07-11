@@ -245,6 +245,10 @@ class CreateProjectRequest(BaseModel):
     material: str = "pla"
 
 
+class RenameProjectRequest(BaseModel):
+    name: str
+
+
 class ApplyCommandRequest(BaseModel):
     action: str
     document_id: str | None = None
@@ -330,6 +334,78 @@ async def get_project(project_id: str, _: None = Depends(verify_token)) -> dict[
         "manifest": proj["manifest"],
         "features": proj["graph"].to_dict(),
     }
+
+
+@app.patch("/api/projects/{project_id}")
+async def rename_project(
+    project_id: str, req: RenameProjectRequest, _: None = Depends(verify_token)
+) -> dict[str, Any]:
+    """改名——更新 manifest 的 name 與 modified_at，原子寫回。"""
+    proj = _get_project(project_id)
+    name = req.name.strip()
+    if not name:
+        raise HTTPException(400, "名稱不可為空")
+    from datetime import datetime, timezone
+    manifest = proj["manifest"]
+    manifest["name"] = name
+    manifest["modified_at"] = datetime.now(timezone.utc).isoformat()
+    atomic_write_json(proj["dir"] / "manifest.json", manifest)
+    return {"project_id": project_id, "name": name}
+
+
+@app.delete("/api/projects/{project_id}")
+async def delete_project(project_id: str, _: None = Depends(verify_token)) -> dict[str, Any]:
+    """刪除專案——從記憶體移除並刪除磁碟目錄（拒絕 WORK_DIR 外的路徑）。"""
+    proj = _get_project(project_id)
+    proj_dir = _canonicalize_path(proj["dir"])
+    projects.pop(project_id, None)
+    import shutil
+    shutil.rmtree(proj_dir, ignore_errors=True)
+    return {"status": "deleted", "project_id": project_id}
+
+
+@app.post("/api/projects/{project_id}/duplicate")
+async def duplicate_project(project_id: str, _: None = Depends(verify_token)) -> dict[str, Any]:
+    """複製專案——整包複製目錄到新 uuid，改寫 manifest 後註冊。"""
+    proj = _get_project(project_id)
+    src_dir = _canonicalize_path(proj["dir"])
+
+    new_id = str(uuid.uuid4())
+    new_dir = WORK_DIR / new_id
+    import shutil
+    shutil.copytree(src_dir, new_dir)
+
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    manifest = dict(proj["manifest"])
+    manifest["project_id"] = new_id
+    manifest["name"] = f"{manifest.get('name', '專案')} 複本"
+    manifest["created_at"] = now
+    manifest["modified_at"] = now
+    atomic_write_json(new_dir / "manifest.json", manifest)
+
+    # 載回 graph——複製後的目錄已含 features.json
+    graph = FeatureGraph()
+    features_path = new_dir / "features.json"
+    if features_path.exists():
+        graph = FeatureGraph.load(features_path)
+    current_rev = 0
+    rev_dir = new_dir / "revisions"
+    if rev_dir.exists():
+        rev_files = sorted(rev_dir.glob("*.json"))
+        if rev_files:
+            current_rev = int(rev_files[-1].stem)
+
+    projects[new_id] = {
+        "graph": graph,
+        "part": None,
+        "dir": new_dir,
+        "manifest": manifest,
+        "_current_rev": current_rev,
+        "mesh_revision": 0,
+        "display_map": None,
+    }
+    return {"project_id": new_id, "manifest": manifest}
 
 
 @app.post("/api/projects/{project_id}/commands")
@@ -858,6 +934,41 @@ async def get_display_map(request: Request, project_id: str, token: str = "") ->
     return display_map
 
 
+# 縮圖大小上限（512×512 PNG 綽綽有餘，擋掉異常大的上傳）
+MAX_THUMBNAIL_SIZE = 2 * 1024 * 1024  # 2 MB
+
+
+@app.post("/api/projects/{project_id}/thumbnail")
+async def upload_thumbnail(
+    request: Request, project_id: str, _: None = Depends(verify_token)
+) -> dict[str, Any]:
+    """存縮圖——由前端 viewer 擷取 3D 畫面的 PNG bytes 上傳（避免 server 端離屏算圖）。"""
+    proj = _get_project(project_id)
+    data = await request.body()
+    if not data:
+        raise HTTPException(400, "縮圖內容為空")
+    if len(data) > MAX_THUMBNAIL_SIZE:
+        raise HTTPException(413, "縮圖過大")
+    # PNG 魔數檢查——只接受 PNG，避免寫入任意檔案
+    if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise HTTPException(400, "僅接受 PNG 格式")
+    atomic_write_bytes(proj["dir"] / "thumbnail.png", data)
+    return {"status": "ok", "size": len(data)}
+
+
+@app.get("/api/projects/{project_id}/thumbnail.png")
+async def get_thumbnail(request: Request, project_id: str, token: str = "") -> Any:
+    """取得縮圖 PNG。認證方式比照 preview.glb：header token 或短時效預簽 ?token=。"""
+    header_token = request.headers.get("X-Session-Token", "")
+    if header_token != SESSION_TOKEN and not _verify_presigned_token(token):
+        raise HTTPException(status_code=401, detail="無效的工作階段 Token")
+    proj = _get_project(project_id)
+    thumb_path = proj["dir"] / "thumbnail.png"
+    if not thumb_path.exists():
+        raise HTTPException(404, "縮圖尚未生成")
+    return FileResponse(str(thumb_path), media_type="image/png")
+
+
 @app.get("/api/projects/{project_id}/events")
 async def events(request: Request, project_id: str, _: None = Depends(verify_token)) -> StreamingResponse:
     """重建進度串流（SSE）。逐特徵回報進度與狀態。"""
@@ -887,9 +998,13 @@ async def list_projects(_: None = Depends(verify_token)) -> dict[str, Any]:
         result.append({
             "project_id": pid,
             "name": manifest.get("name", pid),
+            "created_at": manifest.get("created_at", ""),
             "modified_at": manifest.get("modified_at", ""),
             "feature_count": len(graph.features),
+            "has_thumbnail": (proj["dir"] / "thumbnail.png").exists(),
         })
+    # 最近修改在前——首頁「最近的專案」即照此順序
+    result.sort(key=lambda p: p.get("modified_at", ""), reverse=True)
     return {"projects": result}
 
 

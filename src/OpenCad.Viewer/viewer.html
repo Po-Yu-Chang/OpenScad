@@ -252,13 +252,30 @@
         let camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 10000);
         camera.position.set(100, 80, 100);
 
-        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        // preserveDrawingBuffer: true——縮圖擷取（toDataURL）需要保留繪圖緩衝，否則回傳空白
+        const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
         renderer.setPixelRatio(window.devicePixelRatio);
         renderer.shadowMap.enabled = true;
         renderer.shadowMap.type = THREE.PCFSoftShadowMap;
         renderer.localClippingEnabled = true;
         document.getElementById('viewport').appendChild(renderer.domElement);
+
+        // 專案縮圖擷取——C# 端 rebuild 後呼叫，回傳 PNG dataURL（失敗回空字串，前端自行 fallback）。
+        // 縮到 400px 寬：避免整個視窗大小的 base64 過長超出 WebView 回傳上限。
+        window.opencadCaptureThumbnail = function() {
+            try {
+                renderer.render(scene, camera);  // 先渲一幀，確保緩衝內容為最新
+                const src = renderer.domElement;
+                if (!src.width || !src.height) return '';
+                const w = 400;
+                const h = Math.max(1, Math.round(w * src.height / src.width));
+                const c = document.createElement('canvas');
+                c.width = w; c.height = h;
+                c.getContext('2d').drawImage(src, 0, 0, w, h);
+                return c.toDataURL('image/png');
+            } catch (e) { return ''; }
+        };
 
         // ─── 控制器 ───
         const controls = new OrbitControls(camera, renderer.domElement);

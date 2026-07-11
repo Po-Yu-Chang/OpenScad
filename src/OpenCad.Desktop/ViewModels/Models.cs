@@ -87,6 +87,94 @@ public class ChatMessage : System.ComponentModel.INotifyPropertyChanged
 }
 
 /// <summary>
+/// 專案摘要——啟動首頁縮圖網格與工具列切換器用。
+/// 對應 GET /api/projects 的每一筆。
+/// </summary>
+public class ProjectSummary : System.ComponentModel.INotifyPropertyChanged
+{
+    public string Id { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public int FeatureCount { get; set; }
+    public string CreatedAt { get; set; } = string.Empty;
+    public string ModifiedAt { get; set; } = string.Empty;
+    public bool HasThumbnail { get; set; }
+
+    /// <summary>縮圖點陣圖——由 VM 非同步下載後填入；null 時 UI 顯示特徵圖示 fallback。</summary>
+    private Avalonia.Media.Imaging.Bitmap? _thumbnail;
+    public Avalonia.Media.Imaging.Bitmap? Thumbnail
+    {
+        get => _thumbnail;
+        set { _thumbnail = value; OnPropertyChanged(nameof(Thumbnail)); OnPropertyChanged(nameof(HasThumbnailImage)); }
+    }
+
+    public bool HasThumbnailImage => _thumbnail != null;
+
+    /// <summary>特徵數顯示文字（如「8 特徵」）。</summary>
+    public string FeatureCountText => $"{FeatureCount} 特徵";
+
+    /// <summary>相對修改時間（如「3 天前」「剛剛」）。</summary>
+    public string ModifiedRelative => RelativeTime(ModifiedAt);
+
+    /// <summary>名稱首字——無縮圖時的 placeholder 字樣。</summary>
+    public string Initial => string.IsNullOrWhiteSpace(Name) ? "?" : Name.Substring(0, 1);
+
+    // ─── 卡片內互動狀態（免 modal：改名走 inline TextBox、刪除走 inline 二次確認）───
+
+    private bool _isRenaming;
+    /// <summary>true 時卡片顯示改名 TextBox。</summary>
+    public bool IsRenaming
+    {
+        get => _isRenaming;
+        set { _isRenaming = value; OnPropertyChanged(nameof(IsRenaming)); OnPropertyChanged(nameof(IsNormal)); }
+    }
+
+    private bool _isConfirmingDelete;
+    /// <summary>true 時卡片顯示「確定刪除？是／否」。</summary>
+    public bool IsConfirmingDelete
+    {
+        get => _isConfirmingDelete;
+        set { _isConfirmingDelete = value; OnPropertyChanged(nameof(IsConfirmingDelete)); OnPropertyChanged(nameof(IsNormal)); }
+    }
+
+    /// <summary>非改名且非確認刪除——顯示一般卡片內容。</summary>
+    public bool IsNormal => !_isRenaming && !_isConfirmingDelete;
+
+    private string _editName = string.Empty;
+    /// <summary>改名編輯緩衝。</summary>
+    public string EditName
+    {
+        get => _editName;
+        set { _editName = value; OnPropertyChanged(nameof(EditName)); }
+    }
+
+    /// <summary>改名成功後刷新顯示欄位。</summary>
+    public void NotifyNameChanged()
+    {
+        OnPropertyChanged(nameof(Name));
+        OnPropertyChanged(nameof(Initial));
+    }
+
+    public static string RelativeTime(string iso)
+    {
+        if (!DateTimeOffset.TryParse(iso, System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal,
+                out var t))
+            return "";
+        var span = DateTimeOffset.UtcNow - t;
+        if (span.TotalSeconds < 60) return "剛剛";
+        if (span.TotalMinutes < 60) return $"{(int)span.TotalMinutes} 分鐘前";
+        if (span.TotalHours < 24) return $"{(int)span.TotalHours} 小時前";
+        if (span.TotalDays < 30) return $"{(int)span.TotalDays} 天前";
+        if (span.TotalDays < 365) return $"{(int)(span.TotalDays / 30)} 個月前";
+        return t.ToLocalTime().ToString("yyyy/MM/dd");
+    }
+
+    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+    private void OnPropertyChanged(string name) =>
+        PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
+}
+
+/// <summary>
 /// 特徵樹節點模型。
 /// </summary>
 public class FeatureNode

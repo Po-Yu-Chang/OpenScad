@@ -119,6 +119,43 @@
             <Setter Property="HorizontalAlignment" Value="Left"/>
             <Setter Property="MaxWidth" Value="260"/>
         </Style>
+        <!-- 啟動首頁專案卡片 -->
+        <Style Selector="Border.proj-card">
+            <Setter Property="Background" Value="{DynamicResource MantleBrush}"/>
+            <Setter Property="CornerRadius" Value="12"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Width" Value="212"/>
+            <Setter Property="Margin" Value="9"/>
+        </Style>
+        <Style Selector="Border.proj-card:pointerover">
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
+        </Style>
+        <!-- 卡片開啟按鈕：整塊可點、透明底、hover 微亮 -->
+        <Style Selector="Button.card-open">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="CornerRadius" Value="12"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="Cursor" Value="Hand"/>
+        </Style>
+        <Style Selector="Button.card-open:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource SurfaceBrush}"/>
+        </Style>
+        <!-- 卡片小動作按鈕 -->
+        <Style Selector="Button.card-act">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="{DynamicResource SubtextBrush}"/>
+            <Setter Property="CornerRadius" Value="6"/>
+            <Setter Property="Padding" Value="6,3"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="BorderThickness" Value="0"/>
+        </Style>
+        <Style Selector="Button.card-act:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource SurfaceBrush}"/>
+        </Style>
+
         <!-- 計畫/差異卡片：奶油底、赤陶橘左緣 -->
         <Style Selector="Border.msg-plan">
             <Setter Property="Background" Value="{DynamicResource MantleBrush}"/>

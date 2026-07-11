@@ -80,6 +80,16 @@ public class StringToBoolConverter : IValueConverter
         value is bool b ? (b ? "true" : "false") : "false";
 }
 
+/// <summary>整數為 0 時回傳 true——用於「清單為空」的提示可見性。</summary>
+public class IntIsZeroConverter : IValueConverter
+{
+    public static readonly IntIsZeroConverter Instance = new();
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) =>
+        value is int i && i == 0;
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
+        throw new NotSupportedException();
+}
+
 public class UserIsVisibleConverter : IValueConverter
 {
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) =>

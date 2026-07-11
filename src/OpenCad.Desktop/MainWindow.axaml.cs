@@ -47,6 +47,13 @@ public partial class MainWindow : Window
                     catch { /* WebView 尚未就緒 */ }
                 };
 
+                // 縮圖擷取：執行 JS 並取回 dataURL
+                vm.ViewerScriptEvaluateRequested += async script =>
+                {
+                    try { return await webView.ExecuteScriptAsync(script); }
+                    catch { return null; }
+                };
+
                 // 訂閱 Messages 集合變更——自動捲到底
                 vm.Messages.CollectionChanged += OnMessagesChanged;
 
