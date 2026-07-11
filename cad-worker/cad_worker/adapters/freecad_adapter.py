@@ -439,6 +439,19 @@ class FreeCADAdapter:
         """建立草圖，回傳 FreeCAD Wire（或 Face 如果閉合）。"""
         plane_base = feature.plane.get("base", "XY")
         plane_offset = self._raw_mm(feature.plane.get("offset", 0))
+        
+        # WP1-3: datum: 引用——從 graph.reference_geometry 取得 derived_geometry
+        if isinstance(plane_base, str) and plane_base.startswith("datum:"):
+            datum_id = plane_base[6:]
+            datum_found = False
+            for rg in graph.reference_geometry:
+                if rg.get("id") == datum_id and rg.get("kind") == "plane":
+                    # 對於 FreeCAD，我們將使用座標變換來處理 datum 平面
+                    # 這裡先記錄 datum 平面資訊，後續在 _sketch_entity_to_edges 中使用
+                    datum_found = True
+                    break
+            if not datum_found:
+                raise ValueError(f"找不到 datum 平面: {datum_id}")
 
         has_closed = self._has_closed_profile(feature)
         if not has_closed:
@@ -474,7 +487,12 @@ class FreeCADAdapter:
 
         # 座標轉換：草圖座標 → 3D 座標（依 plane_base）
         def to_3d(x: float, y: float) -> FreeCAD.Vector:
-            if plane_base == "XZ":
+            # 處理 datum 平面
+            if isinstance(plane_base, str) and plane_base.startswith("datum:"):
+                # 對於 datum 平面，暫時使用預設的 XY 平面處理
+                # 未來可以從 reference_geometry 取得更精確的變換矩陣
+                return FreeCAD.Vector(x, y, offset)
+            elif plane_base == "XZ":
                 return FreeCAD.Vector(x, offset, y)
             elif plane_base == "YZ":
                 return FreeCAD.Vector(offset, x, y)

@@ -147,9 +147,14 @@ class CommandValidator:
         # plane 格式檢查
         if ftype == "sketch":
             plane = feature.get("plane", {})
-            base = str(plane.get("base", "XY")).upper()
-            if base not in ("XY", "XZ", "YZ"):
-                errors.append(f"特徵 {fid} plane.base 必須為 XY、XZ 或 YZ，得到：{base}")
+            if not plane:
+                errors.append(f"特徵 {fid}（sketch）缺少 plane 定義")
+            else:
+                base = str(plane.get("base", "XY")).upper()
+                if base not in ("XY", "XZ", "YZ"):
+                    # 檢查是否為 datum 平面引用
+                    if not (base.startswith("DATUM:") and len(base) > 6):
+                        errors.append(f"特徵 {fid} plane.base 必須為 XY、XZ、YZ 或 datum:id，得到：{base}")
 
     @classmethod
     def _validate_update(cls, command: dict[str, Any], errors: list[str]) -> None:

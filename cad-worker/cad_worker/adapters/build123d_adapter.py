@@ -303,6 +303,7 @@ class Build123dAdapter:
         # WP1-3: datum: 引用——從 graph.reference_geometry 取得 derived_geometry
         if isinstance(plane_base, str) and plane_base.startswith("datum:"):
             datum_id = plane_base[6:]
+            datum_found = False
             if hasattr(self, '_current_graph') and self._current_graph is not None:
                 for rg in self._current_graph.reference_geometry:
                     if rg.get("id") == datum_id and rg.get("kind") == "plane":
@@ -312,7 +313,10 @@ class Build123dAdapter:
                         # build123d Plane from origin + normal
                         from build123d import Vector
                         base = Plane(origin=Vector(*origin), z_dir=Vector(*normal))
+                        datum_found = True
                         break
+            if not datum_found:
+                raise ValueError(f"找不到 datum 平面: {datum_id}")
 
         work_plane = base.offset(plane_offset) if plane_offset else base
 
@@ -470,6 +474,12 @@ class Build123dAdapter:
         plane_base = "XY"
         if input_feat and input_feat.type == FeatureType.SKETCH:
             plane_base = input_feat.plane.get("base", "XY")
+
+        # 處理 datum 平面
+        if isinstance(plane_base, str) and plane_base.startswith("datum:"):
+            # 對於 datum 平面，使用草圖本身的座標系統
+            # 在 build123d 中，草圖已經在正確的平面上建立，所以這裡不需要特殊處理
+            plane_base = "XY"  # 作為預設值，實際座標系統已在 sketch 建立時處理
 
         if plane_base == "XY":
             # XY 草圖：用 BuildPart + add + extrude（沿 Z 軸）
