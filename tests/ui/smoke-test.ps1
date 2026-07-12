@@ -12,6 +12,7 @@ param(
 $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
+Add-Type -AssemblyName System.Windows.Forms
 Add-Type @"
 using System;
 using System.Runtime.InteropServices;
@@ -50,7 +51,8 @@ $settings = @{
 
 if ($Engine -eq "freecad") {
     # 檢查 FreeCAD 目錄是否存在
-    $freecadDir = Join-Path $repoRoot "FreeCAD" "FreeCAD_1.1.1-Windows-x86_64-py311"
+    # PS 5.1 的 Join-Path 不支援多個子路徑（PS7 才有）——必須巢狀呼叫
+    $freecadDir = Join-Path (Join-Path $repoRoot "FreeCAD") "FreeCAD_1.1.1-Windows-x86_64-py311"
     if (Test-Path $freecadDir) {
         $settings.freecad_dir = $freecadDir
     }
@@ -81,10 +83,14 @@ try {
 
     # 開始頁的 Menu 用 FindAll(Descendants) 會漏撈（Avalonia/UIA 對 Menu/Popup 的怪癖）；
     # 改用 TreeWalker 遞迴 + Name 包含比對，對 header 空格/箭頭微調也有韌性。
+    # 必須限定 ControlType=MenuItem/Button——純名稱比對會誤中聊天歡迎訊息的 TextBlock
+    # （文案含「載入範例」），Expand/Invoke 打在 Text 元素上靜默無效。
     $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
     function Find-ByName($el, $needle, $maxDepth = 14) {
         if ($maxDepth -lt 0) { return $null }
-        if ($el.Current.Name -like "*$needle*") { return $el }
+        $cur = $el.Current
+        if (($cur.Name -like "*$needle*") -and
+            ($cur.ControlType.ProgrammaticName -in @("ControlType.MenuItem", "ControlType.Button"))) { return $el }
         $c = $walker.GetFirstChild($el)
         while ($c) {
             $f = Find-ByName $c $needle ($maxDepth - 1)
@@ -94,30 +100,29 @@ try {
         return $null
     }
 
-    # 開始頁：展開「載入範例」子選單。用 ExpandCollapse pattern（不靠滑鼠座標/時序）
+    # 開始頁：開啟「載入範例」子選單並選第一項（NEMA17）。
+    # Avalonia 的 MenuItem 在 UIA 只暴露 ScrollItemPattern（無 ExpandCollapse/Invoke），
+    # 實體滑鼠座標點擊又受 DPI 虛擬化影響——鍵盤路徑（SetFocus→Enter→Down→Enter）
+    # 是實測唯一穩定的驅動方式（2026-07-12 驗證）。
     $menu = Find-ByName $win "載入範例"
     if (-not $menu) { throw "找不到載入範例選單（開始頁）" }
-    try {
-        $ecp = [System.Windows.Automation.ExpandCollapsePattern]$menu.GetCurrentPattern(
-            [System.Windows.Automation.ExpandCollapsePattern]::Pattern)
-        $ecp.Expand()
-    } catch {
-        $r = $menu.Current.BoundingRectangle
-        [SmokeMouse]::Click([int]($r.X + $r.Width/2), [int]($r.Y + $r.Height/2))
-    }
-    Start-Sleep -Seconds 1
+    $menu.SetFocus()
+    Start-Sleep -Milliseconds 600
+    [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
+    Start-Sleep -Milliseconds 1200
 
-    # 直接用 Invoke pattern 觸發 NEMA17（避免 popup 關閉/座標偏差）
-    $item = Find-ByName $root "NEMA17"
-    if (-not $item) { throw "找不到 NEMA17 選單項" }
-    try {
-        $inv = [System.Windows.Automation.InvokePattern]$item.GetCurrentPattern(
-            [System.Windows.Automation.InvokePattern]::Pattern)
-        $inv.Invoke()
-    } catch {
-        $r2 = $item.Current.BoundingRectangle
-        [SmokeMouse]::Click([int]($r2.X + $r2.Width/2), [int]($r2.Y + $r2.Height/2))
+    # 子選單展開後 NEMA17 MenuItem 才會出現在 UIA 樹——以此確認選單真的開了
+    $item = Find-ByName $win "NEMA17"
+    if (-not $item) {
+        # 少數情況 Enter 只取得焦點未展開——補一次 DOWN 再確認
+        [System.Windows.Forms.SendKeys]::SendWait("{DOWN}")
+        Start-Sleep -Milliseconds 800
+        $item = Find-ByName $win "NEMA17"
     }
+    if (-not $item) { throw "找不到 NEMA17 選單項（子選單未展開）" }
+    [System.Windows.Forms.SendKeys]::SendWait("{DOWN}")
+    Start-Sleep -Milliseconds 400
+    [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
     Write-Host "3/5 已觸發載入範例，等待建模..." -ForegroundColor Cyan
     Start-Sleep -Seconds 40
 
