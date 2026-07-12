@@ -65,7 +65,7 @@ public class AsyncRelayCommand<T> : ICommand
     }
 
     public bool CanExecute(object? parameter) =>
-        !_isRunning && (_canExecute?.Invoke((T?)parameter) ?? true);
+        !_isRunning && (_canExecute?.Invoke(parameter is T t ? t : default) ?? true);
 
     public async void Execute(object? parameter)
     {

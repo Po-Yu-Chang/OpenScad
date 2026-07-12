@@ -270,6 +270,7 @@ public class MainViewModel : INotifyPropertyChanged
     public ICommand BeginDeleteCommand { get; }
     public ICommand ConfirmDeleteCommand { get; }
     public ICommand CancelCardActionCommand { get; }
+    public ICommand ReconnectWorkerCommand { get; }
 
     /// <summary>
     /// 當 ViewModel 需要在 3D 視窗中執行 JavaScript 時觸發。
@@ -286,53 +287,58 @@ public class MainViewModel : INotifyPropertyChanged
         _worker = worker;
         _workerClient = workerClient;
 
-        SendCommand = new AsyncRelayCommand(SendAsync, () => !string.IsNullOrWhiteSpace(InputText));
-        NewProjectCommand = new AsyncRelayCommand(NewProjectAsync, () => IsWorkerConnected);
-        OpenProjectCommand = new AsyncRelayCommand(OpenProjectAsync, () => IsWorkerConnected);
-        SaveProjectCommand = new RelayCommand(() => { }, () => false);  // Phase 1 恆停用
-        SetViewCommand = new RelayCommand<string>(SetView);
-        ExportCommand = new AsyncRelayCommand<string>(ExportAsync, fmt => HasModel && IsWorkerConnected);
-        RebuildCommand = new AsyncRelayCommand(RebuildAsync, () => HasProject && IsWorkerConnected);
-        LoadExampleCommand = new AsyncRelayCommand<string>(LoadExampleAsync, name => IsWorkerConnected);
-        ToggleRightPanelCommand = new RelayCommand(() => IsRightPanelVisible = !IsRightPanelVisible);
-        UndoCommand = new AsyncRelayCommand(UndoAsync, () => HasProject && IsWorkerConnected);
-        OpenLlmSettingsCommand = new RelayCommand(OpenLlmSettings);
-        RedetectLlmCommand = new AsyncRelayCommand(async () =>
+        SendCommand = ACmd(SendAsync, () => !string.IsNullOrWhiteSpace(InputText));
+        NewProjectCommand = ACmd(NewProjectAsync, () => IsWorkerConnected);
+        OpenProjectCommand = ACmd(OpenProjectAsync, () => IsWorkerConnected);
+        SaveProjectCommand = RCmd(() => { }, () => false);  // Phase 1 恆停用
+        SetViewCommand = RCmd<string>(SetView);
+        ExportCommand = ACmd<string>(ExportAsync, fmt => HasModel && IsWorkerConnected);
+        RebuildCommand = ACmd(RebuildAsync, () => HasProject && IsWorkerConnected);
+        LoadExampleCommand = ACmd<string>(LoadExampleAsync, name => IsWorkerConnected);
+        ToggleRightPanelCommand = RCmd(() => IsRightPanelVisible = !IsRightPanelVisible);
+        UndoCommand = ACmd(UndoAsync, () => HasProject && IsWorkerConnected);
+        OpenLlmSettingsCommand = RCmd(OpenLlmSettings);
+        RedetectLlmCommand = ACmd(async () =>
         {
             LlmStatus = "LLM：偵測中…";
             await DetectLlmAsync();
         });
-        RedoCommand = new AsyncRelayCommand(RedoAsync, () => HasProject && IsWorkerConnected);
-        NewSketchCommand = new AsyncRelayCommand(NewSketchAsync, () => IsWorkerConnected);
-        EditSketchCommand = new AsyncRelayCommand(EditSketchAsync, () => CanEditSketch && IsWorkerConnected);
-        DeleteFeatureCommand = new AsyncRelayCommand(DeleteFeatureAsync, () => _selectedFeature != null && !_selectedFeature.IsDatumPlane && IsWorkerConnected);
-        EditParametersCommand = new RelayCommand(EditParameters, () => _selectedFeature != null && !_selectedFeature.IsDatumPlane);
-        SuppressFeatureCommand = new AsyncRelayCommand(SuppressFeatureAsync, () => _selectedFeature != null && !_selectedFeature.IsDatumPlane && IsWorkerConnected);
-        UnsuppressFeatureCommand = new AsyncRelayCommand(UnsuppressFeatureAsync, () => _selectedFeature != null && !_selectedFeature.IsDatumPlane && IsWorkerConnected);
-        RollbackToHereCommand = new AsyncRelayCommand(RollbackToHereAsync, () => _selectedFeature != null && !_selectedFeature.IsDatumPlane && IsWorkerConnected);
-        RollbackToEndCommand = new AsyncRelayCommand(RollbackToEndAsync, () => IsWorkerConnected);
-        ExportChatCommand = new AsyncRelayCommand(ExportChatAsync, () => Messages.Count > 0);
-        CreateDatumPlaneCommand = new AsyncRelayCommand(CreateDatumPlaneDialogAsync, () => IsWorkerConnected);
+        RedoCommand = ACmd(RedoAsync, () => HasProject && IsWorkerConnected);
+        NewSketchCommand = ACmd(NewSketchAsync, () => IsWorkerConnected);
+        EditSketchCommand = ACmd(EditSketchAsync, () => CanEditSketch && IsWorkerConnected);
+        DeleteFeatureCommand = ACmd(DeleteFeatureAsync, () => _selectedFeature != null && !_selectedFeature.IsDatumPlane && IsWorkerConnected);
+        EditParametersCommand = RCmd(EditParameters, () => _selectedFeature != null && !_selectedFeature.IsDatumPlane);
+        SuppressFeatureCommand = ACmd(SuppressFeatureAsync, () => _selectedFeature != null && !_selectedFeature.IsDatumPlane && IsWorkerConnected);
+        UnsuppressFeatureCommand = ACmd(UnsuppressFeatureAsync, () => _selectedFeature != null && !_selectedFeature.IsDatumPlane && IsWorkerConnected);
+        RollbackToHereCommand = ACmd(RollbackToHereAsync, () => _selectedFeature != null && !_selectedFeature.IsDatumPlane && IsWorkerConnected);
+        RollbackToEndCommand = ACmd(RollbackToEndAsync, () => IsWorkerConnected);
+        ExportChatCommand = ACmd(ExportChatAsync, () => Messages.Count > 0);
+        CreateDatumPlaneCommand = ACmd(CreateDatumPlaneDialogAsync, () => IsWorkerConnected);
 
         // WP1-4: 量測/選取/顯示模式命令
-        ToggleMeasureCommand = new RelayCommand(() => IsMeasuring = !IsMeasuring);
-        ApplyAllParametersCommand = new AsyncRelayCommand(ApplyAllParametersAsync, () => SelectedFeatureParameters.Any(p => p.IsDirty) && IsWorkerConnected);
-        IsolateFeatureCommand = new AsyncRelayCommand(IsolateFeatureAsync, () => _selectedFeature != null && IsWorkerConnected);
-        HideFeatureCommand = new AsyncRelayCommand(HideFeatureAsync, () => _selectedFeature != null && IsWorkerConnected);
-        ShowAllFeaturesCommand = new AsyncRelayCommand(ShowAllFeaturesAsync, () => IsWorkerConnected);
-        SetSelectionFilterCommand = new RelayCommand<SelectionFilter>(f => SelectionFilter = f);
-        SetDisplayModeCommand = new RelayCommand<DisplayMode>(m => DisplayModeProp = m);
+        ToggleMeasureCommand = RCmd(() => IsMeasuring = !IsMeasuring);
+        ApplyAllParametersCommand = ACmd(ApplyAllParametersAsync, () => SelectedFeatureParameters.Any(p => p.IsDirty) && IsWorkerConnected);
+        IsolateFeatureCommand = ACmd(IsolateFeatureAsync, () => _selectedFeature != null && IsWorkerConnected);
+        HideFeatureCommand = ACmd(HideFeatureAsync, () => _selectedFeature != null && IsWorkerConnected);
+        ShowAllFeaturesCommand = ACmd(ShowAllFeaturesAsync, () => IsWorkerConnected);
+        SetSelectionFilterCommand = RCmd<SelectionFilter>(f => SelectionFilter = f);
+        SetDisplayModeCommand = RCmd<DisplayMode>(m => DisplayModeProp = m);
 
         // 專案管理命令
-        ShowStartPageCommand = new AsyncRelayCommand(ShowStartPageAsync, () => IsWorkerConnected);
-        RefreshProjectListCommand = new AsyncRelayCommand(LoadProjectListAsync, () => IsWorkerConnected);
-        OpenProjectFromSummaryCommand = new AsyncRelayCommand<ProjectSummary>(OpenProjectFromSummaryAsync, p => IsWorkerConnected);
-        DuplicateProjectCommand = new AsyncRelayCommand<ProjectSummary>(DuplicateProjectFromSummaryAsync, p => IsWorkerConnected);
-        BeginRenameCommand = new RelayCommand<ProjectSummary>(BeginRename);
-        CommitRenameCommand = new AsyncRelayCommand<ProjectSummary>(CommitRenameAsync, p => IsWorkerConnected);
-        BeginDeleteCommand = new RelayCommand<ProjectSummary>(p => { if (p != null) p.IsConfirmingDelete = true; });
-        ConfirmDeleteCommand = new AsyncRelayCommand<ProjectSummary>(ConfirmDeleteAsync, p => IsWorkerConnected);
-        CancelCardActionCommand = new RelayCommand<ProjectSummary>(p => { if (p != null) { p.IsRenaming = false; p.IsConfirmingDelete = false; } });
+        ShowStartPageCommand = ACmd(ShowStartPageAsync, () => IsWorkerConnected);
+        RefreshProjectListCommand = ACmd(LoadProjectListAsync, () => IsWorkerConnected);
+        OpenProjectFromSummaryCommand = ACmd<ProjectSummary>(OpenProjectFromSummaryAsync, p => IsWorkerConnected);
+        DuplicateProjectCommand = ACmd<ProjectSummary>(DuplicateProjectFromSummaryAsync, p => IsWorkerConnected);
+        BeginRenameCommand = RCmd<ProjectSummary>(BeginRename);
+        CommitRenameCommand = ACmd<ProjectSummary>(CommitRenameAsync, p => IsWorkerConnected);
+        BeginDeleteCommand = RCmd<ProjectSummary>(p => { if (p != null) p.IsConfirmingDelete = true; });
+        ConfirmDeleteCommand = ACmd<ProjectSummary>(ConfirmDeleteAsync, p => IsWorkerConnected);
+        CancelCardActionCommand = RCmd<ProjectSummary>(p => { if (p != null) { p.IsRenaming = false; p.IsConfirmingDelete = false; } });
+        ReconnectWorkerCommand = ACmd(async () =>
+        {
+            WorkerStatus = "Worker：重新連線中…";
+            await DetectWorkerAsync();
+        });
 
         // 歡迎訊息
         Messages.Add(ChatMessage.Assistant(
@@ -1319,14 +1325,14 @@ public class MainViewModel : INotifyPropertyChanged
                 // 顯示計畫卡片
                 // 一次性卡片：套用/取消後停用按鈕，防止重複執行
                 var planMsg = ChatMessage.FromPlan(plan);
-                planMsg.ApplyPlanCommand = new RelayCommand(() =>
+                planMsg.ApplyPlanCommand = RCmd(() =>
                 {
                     if (!planMsg.IsActionable) return;
                     planMsg.IsActionable = false;
                     AddHistory("user", "[套用計畫]");
                     _ = ApplyPlanAsync(plan);
                 });
-                planMsg.CancelPlanCommand = new RelayCommand(() =>
+                planMsg.CancelPlanCommand = RCmd(() =>
                 {
                     if (!planMsg.IsActionable) return;
                     planMsg.IsActionable = false;
@@ -1788,14 +1794,14 @@ public class MainViewModel : INotifyPropertyChanged
             // 顯示差異卡片（A2）
             // 一次性卡片：套用/取消後停用按鈕，防止重複執行
             var diffMsg = ChatMessage.FromDiff(diff);
-            diffMsg.ApplyDiffCommand = new RelayCommand(() =>
+            diffMsg.ApplyDiffCommand = RCmd(() =>
             {
                 if (!diffMsg.IsActionable) return;
                 diffMsg.IsActionable = false;
                 AddHistory("user", $"[套用修改] {historyTarget}");
                 _ = ApplyDiffAsync(command);
             });
-            diffMsg.CancelDiffCommand = new RelayCommand(() =>
+            diffMsg.CancelDiffCommand = RCmd(() =>
             {
                 if (!diffMsg.IsActionable) return;
                 diffMsg.IsActionable = false;
@@ -1839,14 +1845,14 @@ public class MainViewModel : INotifyPropertyChanged
         AddHistory("assistant", $"[批次修改] {plan.Summary}");
 
         var planMsg = ChatMessage.FromPlan(plan);
-        planMsg.ApplyPlanCommand = new RelayCommand(() =>
+        planMsg.ApplyPlanCommand = RCmd(() =>
         {
             if (!planMsg.IsActionable) return;
             planMsg.IsActionable = false;
             AddHistory("user", "[套用批次修改]");
             _ = ApplyCommandBatchAsync(commands, plan.Summary);
         });
-        planMsg.CancelPlanCommand = new RelayCommand(() =>
+        planMsg.CancelPlanCommand = RCmd(() =>
         {
             if (!planMsg.IsActionable) return;
             planMsg.IsActionable = false;
@@ -2778,7 +2784,7 @@ public class MainViewModel : INotifyPropertyChanged
         foreach (var p in _selectedFeature.Parameters)
         {
             if (p.IsEditable)
-                p.ApplyCommand = new AsyncRelayCommand(() => ApplyParameterEditAsync(featureId, p));
+                p.ApplyCommand = ACmd(() => ApplyParameterEditAsync(featureId, p));
             SelectedFeatureParameters.Add(p);
         }
 
@@ -3028,6 +3034,31 @@ public class MainViewModel : INotifyPropertyChanged
         ((AsyncRelayCommand<ProjectSummary>)CommitRenameCommand).RaiseCanExecuteChanged();
         ((AsyncRelayCommand<ProjectSummary>)ConfirmDeleteCommand).RaiseCanExecuteChanged();
         OnPropertyChanged(nameof(HasProject));
+    }
+
+    // ══ 命令工廠：統一注入 ReportError，讓任何命令的例外都能浮現而非靜默吞掉 ══
+    private AsyncRelayCommand ACmd(Func<Task> execute, Func<bool>? canExecute = null)
+        => new AsyncRelayCommand(execute, canExecute, ReportError);
+    private AsyncRelayCommand<T> ACmd<T>(Func<T?, Task> execute, Func<T?, bool>? canExecute = null)
+        => new AsyncRelayCommand<T>(execute, canExecute, ReportError);
+    private RelayCommand RCmd(Action execute, Func<bool>? canExecute = null)
+        => new RelayCommand(execute, canExecute, ReportError);
+    private RelayCommand<T> RCmd<T>(Action<T?> execute, Func<T?, bool>? canExecute = null)
+        => new RelayCommand<T>(execute, canExecute, ReportError);
+
+    /// <summary>
+    /// 命令執行期間未預期的例外——統一浮現到對話與狀態列，並自動展開右側窗格，
+    /// 確保使用者一定看得到「為什麼按了沒反應」，不再靜默失敗。
+    /// </summary>
+    private void ReportError(Exception ex)
+    {
+        var msg = ex.Message;
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            Messages.Add(ChatMessage.Error($"操作失敗：{msg}"));
+            WorkerStatus = $"錯誤：{msg}";
+            IsRightPanelVisible = true;   // 錯誤在右側對話窗格——收合時自動展開
+        });
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;

@@ -452,6 +452,22 @@
             </Grid>
         </Border>
 
+        <!-- ═══ 後端未連線橫幅：解釋「為什麼工具列都按不動」，並提供重試 ═══ -->
+        <Border Grid.Row="1" VerticalAlignment="Top" IsVisible="{Binding !IsWorkerConnected}"
+                Background="{DynamicResource WarningBrush}" Padding="14,8">
+            <Grid ColumnDefinitions="Auto,*,Auto">
+                <TextBlock Grid.Column="0" Text="⚠" Foreground="{DynamicResource CreamTextBrush}"
+                           FontSize="15" VerticalAlignment="Center" Margin="0,0,10,0" />
+                <TextBlock Grid.Column="1" Foreground="{DynamicResource CreamTextBrush}" VerticalAlignment="Center"
+                           TextWrapping="Wrap"
+                           Text="後端 CAD 引擎（Worker）未連線——建立/編輯/匯出等按鈕會暫時停用。請確認後端已啟動後重試。" />
+                <Button Grid.Column="2" Content="↻ 重新連線" Command="{Binding ReconnectWorkerCommand}"
+                        VerticalAlignment="Center" Margin="12,0,0,0"
+                        Background="{DynamicResource CreamTextBrush}" Foreground="{DynamicResource TextBrush}"
+                        CornerRadius="8" Padding="12,5" FontWeight="SemiBold" Cursor="Hand" />
+            </Grid>
+        </Border>
+
         <!-- ═══ 狀態列 ═══ -->
         <Border Grid.Row="2" Background="{DynamicResource CrustBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0" Padding="12,4">
             <StackPanel Orientation="Horizontal" Spacing="16">

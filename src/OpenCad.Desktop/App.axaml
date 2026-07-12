@@ -58,9 +58,26 @@
             <Setter Property="CornerRadius" Value="8"/>
             <Setter Property="Padding" Value="10,6"/>
             <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Cursor" Value="Hand"/>
         </Style>
         <Style Selector="Button.tool:pointerover /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="Background" Value="{DynamicResource SurfaceBrush}"/>
+        </Style>
+
+        <!-- ══ 停用狀態：讓「不能按」的控制項一眼可辨，杜絕「看起來能按卻沒反應」 ══ -->
+        <!-- Button.tool 原本無 disabled 樣式，停用後與正常態外觀相同，是「按了沒反應」的主因之一 -->
+        <Style Selector="Button.tool:disabled">
+            <Setter Property="Opacity" Value="0.38"/>
+            <Setter Property="Cursor" Value="Arrow"/>
+        </Style>
+        <Style Selector="Button.card-act:disabled">
+            <Setter Property="Opacity" Value="0.38"/>
+        </Style>
+        <Style Selector="Button.card-open:disabled">
+            <Setter Property="Opacity" Value="0.55"/>
+        </Style>
+        <Style Selector="MenuItem:disabled">
+            <Setter Property="Opacity" Value="0.4"/>
         </Style>
 
         <!-- 主要動作按鈕：赤陶橘底、奶油字 -->
@@ -71,6 +88,7 @@
             <Setter Property="Padding" Value="16,7"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
             <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Cursor" Value="Hand"/>
         </Style>
         <Style Selector="Button.primary:pointerover /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="Background" Value="#BB4E20"/>
