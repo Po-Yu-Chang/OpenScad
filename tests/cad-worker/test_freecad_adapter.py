@@ -360,12 +360,89 @@ class TestFreeCADAdapterChamfer:
         assert vol < 4000.0
         assert vol > 3800.0
 
+    def test_chamfer_edge_selector_actually_selects(self, adapter):
+        """WP1-0R2 修復核心案例：edge_selector 原本 all/else 兩分支完全相同、
+        參數被忽略是死碼。"top"（4 條邊）跟 "all"（12 條邊）切掉的體積必須
+        不同，才能證明 edge_selector 真的有作用。"""
+        def _chamfered_volume(selector):
+            graph = FeatureGraph()
+            graph.add_feature(_make_rect_sketch("s1", 20, 20))
+            graph.add_feature(Feature(
+                feature_id="p1", name="p1", type=FeatureType.PAD, input="s1", parameters={"length": 10},
+            ))
+            graph.add_feature(Feature(
+                feature_id="c1", name="c1", type=FeatureType.CHAMFER, input="p1",
+                parameters={"distance": 1, "edge_selector": selector},
+            ))
+            return adapter.build_with_trace(graph).part._freecad_shape.Volume
+
+        vol_top = _chamfered_volume("top")
+        vol_all = _chamfered_volume("all")
+        assert vol_top != vol_all
+        assert vol_top > vol_all  # 只切 4 條邊，留下的體積應比切 12 條邊多
+
+
+class TestFreeCADAdapterShell:
+    def test_shell_reduces_volume_matching_build123d(self, adapter):
+        """WP1-0R2 新增：shell 目前雙引擎都只是均勻內縮（無開口面選擇器，
+        見 adapter 內文件字串的已知限制說明），數值上要跟 build123d 一致：
+        32×45×7.5 盒子、thickness=2 → (28)(41)(3.5)=4018mm³。"""
+        graph = FeatureGraph()
+        graph.add_feature(_make_rect_sketch("s1", 32, 45))
+        graph.add_feature(Feature(
+            feature_id="p1", name="p1", type=FeatureType.PAD, input="s1", parameters={"length": 7.5},
+        ))
+        graph.add_feature(Feature(
+            feature_id="sh1", name="sh1", type=FeatureType.SHELL, input="p1",
+            parameters={"thickness": 2.0},
+        ))
+        result = adapter.build_with_trace(graph)
+        assert result.part is not None
+        assert abs(result.part.volume - 4018.0) < 0.5
+
+    def test_shell_too_thick_raises(self, adapter):
+        graph = FeatureGraph()
+        graph.add_feature(_make_rect_sketch("s1", 10, 10))
+        graph.add_feature(Feature(
+            feature_id="p1", name="p1", type=FeatureType.PAD, input="s1", parameters={"length": 5},
+        ))
+        graph.add_feature(Feature(
+            feature_id="sh1", name="sh1", type=FeatureType.SHELL, input="p1",
+            parameters={"thickness": 20.0},
+        ))
+        with pytest.raises(ValueError):
+            adapter.build_with_trace(graph)
+
 
 class TestFreeCADAdapterRevolve:
     def test_revolve_circle_360(self, adapter):
-        # NOTE: FreeCAD headless revolve has known issues producing zero-volume
-        # solids from Face profiles. This test verifies the adapter doesn't crash
-        # and produces some shape. Volume validation is skipped.
+        """WP1-0R2 修復：旋轉軸改由草圖 plane 推導（XY→X 軸），輪廓必須
+        偏離該軸才是合法幾何——圓心用 center_y=10（偏離 X 軸），不能像舊
+        測試那樣用 center_x=10/center_y=0（正好落在推導出的 X 軸上，兩個
+        引擎對這種退化資料都會失敗，不是「已知限制」，是資料本身無效）。
+        修復後應能算出正確體積（環面 volume = 2π²Rr²）。
+        """
+        import math
+        graph = FeatureGraph()
+        graph.add_feature(Feature(
+            feature_id="s1", name="s1", type=FeatureType.SKETCH,
+            plane={"base": "XY", "offset": 0},
+            sketch_entities=[
+                {"entity_type": "circle", "parameters": {"radius": 3, "center_x": 0, "center_y": 10}},
+            ],
+        ))
+        graph.add_feature(Feature(
+            feature_id="r1", name="r1", type=FeatureType.REVOLVE, input="s1",
+            parameters={"angle": 360},
+        ))
+        result = adapter.build_with_trace(graph)
+        assert result.part is not None
+        expected_volume = 2 * math.pi ** 2 * 10 * 3 ** 2
+        assert abs(result.part.volume - expected_volume) < 1.0
+
+    def test_revolve_degenerate_profile_raises(self, adapter):
+        """輪廓中心恰好落在推導出的旋轉軸上——必須 raise，不得靜默回傳
+        零體積「成功」（WP1-0R2 修復核心案例）。"""
         graph = FeatureGraph()
         graph.add_feature(Feature(
             feature_id="s1", name="s1", type=FeatureType.SKETCH,
@@ -376,12 +453,195 @@ class TestFreeCADAdapterRevolve:
         ))
         graph.add_feature(Feature(
             feature_id="r1", name="r1", type=FeatureType.REVOLVE, input="s1",
-            parameters={"angle": 360, "axis": "Z"},
+            parameters={"angle": 360},
+        ))
+        with pytest.raises(ValueError):
+            adapter.build_with_trace(graph)
+
+
+class TestFreeCADAdapterMirror:
+    def test_mirror_across_xz_doubles_volume_no_overlap(self, adapter):
+        graph = FeatureGraph()
+        graph.add_feature(Feature(
+            feature_id="s1", name="s1", type=FeatureType.SKETCH,
+            plane={"base": "XY", "offset": 0},
+            sketch_entities=[
+                {"entity_type": "rectangle", "parameters": {"width": 10, "height": 10, "center_x": 0, "center_y": 10}},
+            ],
+        ))
+        graph.add_feature(Feature(
+            feature_id="p1", name="p1", type=FeatureType.PAD, input="s1", parameters={"length": 5},
+        ))
+        graph.add_feature(Feature(
+            feature_id="m1", name="m1", type=FeatureType.MIRROR, input="p1",
         ))
         result = adapter.build_with_trace(graph)
-        # Revolve may produce zero volume in headless FreeCAD (known limitation).
-        # Just verify it doesn't crash and produces a shape.
+        assert abs(result.part.volume - 1000.0) < 0.5
+
+
+class TestFreeCADAdapterBoolean:
+    def _two_boxes(self):
+        graph = FeatureGraph()
+        graph.add_feature(Feature(
+            feature_id="s1", name="s1", type=FeatureType.SKETCH,
+            plane={"base": "XY", "offset": 0},
+            sketch_entities=[{"entity_type": "rectangle", "parameters": {"width": 10, "height": 10, "center_x": 0, "center_y": 0}}],
+        ))
+        graph.add_feature(Feature(feature_id="p1", name="p1", type=FeatureType.PAD, input="s1", parameters={"length": 10}))
+        graph.add_feature(Feature(
+            feature_id="s2", name="s2", type=FeatureType.SKETCH,
+            plane={"base": "XY", "offset": 0},
+            sketch_entities=[{"entity_type": "rectangle", "parameters": {"width": 10, "height": 10, "center_x": 5, "center_y": 5}}],
+        ))
+        graph.add_feature(Feature(feature_id="p2", name="p2", type=FeatureType.PAD, input="s2", parameters={"length": 10}))
+        return graph
+
+    def test_boolean_union(self, adapter):
+        graph = self._two_boxes()
+        graph.add_feature(Feature(
+            feature_id="u1", name="u1", type=FeatureType.BOOLEAN_UNION, references=["p1", "p2"],
+        ))
+        result = adapter.build_with_trace(graph)
+        # 兩個 10x10x10 立方體重疊 5x5x10=250 → union = 1000+1000-250=1750
+        assert abs(result.part.volume - 1750.0) < 0.5
+
+    def test_boolean_difference(self, adapter):
+        graph = self._two_boxes()
+        graph.add_feature(Feature(
+            feature_id="d1", name="d1", type=FeatureType.BOOLEAN_DIFFERENCE, references=["p1", "p2"],
+        ))
+        result = adapter.build_with_trace(graph)
+        # p1(1000) 減去重疊 250 = 750
+        assert abs(result.part.volume - 750.0) < 0.5
+
+    def test_boolean_intersection(self, adapter):
+        graph = self._two_boxes()
+        graph.add_feature(Feature(
+            feature_id="i1", name="i1", type=FeatureType.BOOLEAN_INTERSECTION, references=["p1", "p2"],
+        ))
+        result = adapter.build_with_trace(graph)
+        assert abs(result.part.volume - 250.0) < 0.5
+
+
+class TestFreeCADAdapterSweep:
+    def test_sweep_circle_along_line(self, adapter):
+        graph = FeatureGraph()
+        graph.add_feature(Feature(
+            feature_id="profile", name="profile", type=FeatureType.SKETCH,
+            plane={"base": "YZ", "offset": 0},
+            sketch_entities=[{"entity_type": "circle", "parameters": {"radius": 3, "center_x": 0, "center_y": 0}}],
+        ))
+        graph.add_feature(Feature(
+            feature_id="path", name="path", type=FeatureType.SKETCH,
+            plane={"base": "XY", "offset": 0},
+            sketch_entities=[{"entity_type": "line", "parameters": {"x1": 0, "y1": 0, "x2": 20, "y2": 0}}],
+        ))
+        graph.add_feature(Feature(
+            feature_id="sw1", name="sw1", type=FeatureType.SWEEP, input="profile", references=["path"],
+        ))
+        result = adapter.build_with_trace(graph)
+        expected_volume = math.pi * 3 ** 2 * 20
+        assert abs(result.part.volume - expected_volume) < 5.0
+
+
+class TestFreeCADAdapterLoft:
+    def test_loft_between_two_circles(self, adapter):
+        graph = FeatureGraph()
+        graph.add_feature(Feature(
+            feature_id="s1", name="s1", type=FeatureType.SKETCH,
+            plane={"base": "XY", "offset": 0},
+            sketch_entities=[{"entity_type": "circle", "parameters": {"radius": 5, "center_x": 0, "center_y": 0}}],
+        ))
+        graph.add_feature(Feature(
+            feature_id="s2", name="s2", type=FeatureType.SKETCH,
+            plane={"base": "XY", "offset": 20},
+            sketch_entities=[{"entity_type": "circle", "parameters": {"radius": 3, "center_x": 0, "center_y": 0}}],
+        ))
+        graph.add_feature(Feature(
+            feature_id="lo1", name="lo1", type=FeatureType.LOFT, input="s1", references=["s2"],
+        ))
+        result = adapter.build_with_trace(graph)
         assert result.part is not None
+        assert result.part.volume > 0
+
+
+class TestFreeCADAdapterWP16Features:
+    """WP1-6 六型：draft/rib/thin/variable_fillet/countersink/cosmetic_thread。"""
+
+    def test_draft_is_noop_passthrough(self, adapter):
+        """與 build123d adapter 對齊：目前簡化為不改變幾何。"""
+        graph = FeatureGraph()
+        graph.add_feature(_make_rect_sketch("s1", 10, 10))
+        graph.add_feature(Feature(feature_id="p1", name="p1", type=FeatureType.PAD, input="s1", parameters={"length": 5}))
+        graph.add_feature(Feature(feature_id="d1", name="d1", type=FeatureType.DRAFT, input="p1", parameters={"angle_deg": 2}))
+        result = adapter.build_with_trace(graph)
+        assert abs(result.part.volume - 500.0) < 0.5
+
+    def test_rib_symmetric_adds_volume(self, adapter):
+        graph = FeatureGraph()
+        graph.add_feature(_make_rect_sketch("s1", 20, 20))
+        graph.add_feature(Feature(feature_id="p1", name="p1", type=FeatureType.PAD, input="s1", parameters={"length": 5}))
+        graph.add_feature(Feature(
+            feature_id="rib_sketch", name="rib_sketch", type=FeatureType.SKETCH,
+            plane={"base": "XY", "offset": 0},
+            sketch_entities=[{"entity_type": "rectangle", "parameters": {"width": 4, "height": 20, "center_x": 0, "center_y": 0}}],
+        ))
+        graph.add_feature(Feature(
+            feature_id="rib1", name="rib1", type=FeatureType.RIB, input="p1",
+            parameters={"thickness": 2, "direction": "symmetric", "sketch_id": "rib_sketch"},
+        ))
+        result = adapter.build_with_trace(graph)
+        # base 2000 + rib 4x20x2(symmetric two halves of total thickness 2)=160 → > base
+        assert result.part.volume > 2000.0
+
+    def test_thin_extrudes_then_shells(self, adapter):
+        graph = FeatureGraph()
+        graph.add_feature(_make_rect_sketch("s1", 20, 20))
+        graph.add_feature(Feature(
+            feature_id="th1", name="th1", type=FeatureType.THIN, input="s1",
+            parameters={"length": 10, "thickness": 2},
+        ))
+        result = adapter.build_with_trace(graph)
+        assert result.part is not None
+        assert result.part.volume > 0
+        assert result.part.volume < 20 * 20 * 10  # 薄殼後體積應小於實心拉伸
+
+    def test_variable_fillet_uses_first_radius(self, adapter):
+        """與 build123d adapter 對齊：目前簡化為單一半徑（取 radii[0]）。"""
+        graph = FeatureGraph()
+        graph.add_feature(_make_rect_sketch("s1", 20, 20))
+        graph.add_feature(Feature(feature_id="p1", name="p1", type=FeatureType.PAD, input="s1", parameters={"length": 10}))
+        graph.add_feature(Feature(
+            feature_id="vf1", name="vf1", type=FeatureType.VARIABLE_FILLET, input="p1",
+            parameters={"radii": [1, 3]},
+        ))
+        result = adapter.build_with_trace(graph)
+        assert result.part is not None
+        assert result.part.volume < 4000.0
+
+    def test_countersink_removes_material(self, adapter):
+        graph = FeatureGraph()
+        graph.add_feature(_make_rect_sketch("s1", 20, 20))
+        graph.add_feature(Feature(feature_id="p1", name="p1", type=FeatureType.PAD, input="s1", parameters={"length": 10}))
+        graph.add_feature(Feature(
+            feature_id="cs1", name="cs1", type=FeatureType.COUNTERSINK, input="p1",
+            parameters={"diameter": 3, "countersink_diameter": 6, "countersink_angle_deg": 90, "positions": [[0, 0]]},
+        ))
+        result = adapter.build_with_trace(graph)
+        assert result.part.volume < 4000.0
+
+    def test_cosmetic_thread_returns_none_keeps_upstream(self, adapter):
+        """與 build123d adapter 對齊：不改變幾何，rebuild 沿用上一個特徵結果。"""
+        graph = FeatureGraph()
+        graph.add_feature(_make_rect_sketch("s1", 20, 20))
+        graph.add_feature(Feature(feature_id="p1", name="p1", type=FeatureType.PAD, input="s1", parameters={"length": 10}))
+        graph.add_feature(Feature(
+            feature_id="ct1", name="ct1", type=FeatureType.COSMETIC_THREAD, input="p1",
+            parameters={"diameter": 6, "pitch": 1, "positions": [[0, 0]]},
+        ))
+        result = adapter.build_with_trace(graph)
+        assert abs(result.part.volume - 4000.0) < 0.5
+        assert result.part.volume > 0
 
 
 class TestFreeCADAdapterPattern:

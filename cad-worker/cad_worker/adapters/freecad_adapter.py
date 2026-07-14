@@ -247,19 +247,20 @@ class FreeCADShapeWrapper:
 
     @property
     def volume(self) -> float:
-        """回傳體積（mm³），與 build123d Part.volume 相容。"""
-        try:
-            return float(self._shape.Volume)
-        except Exception:
-            return 0.0
+        """回傳體積（mm³），與 build123d Part.volume 相容。
+
+        WP1-0R2 修復（地雷 #19）：先前遇例外回傳 0.0，會把「算不出體積」
+        掩蓋成「體積確實是 0」——兩者對呼叫端（validators._check_volume 等）
+        意義完全不同，前者該是警告、後者才是「零體積實體」錯誤。改為讓例外
+        往上浮現，由呼叫端自行決定如何處理（現有呼叫端多半已有 try/except，
+        會正確分流成警告或結構化 500，不會再靜默回報錯誤的 0.0）。
+        """
+        return float(self._shape.Volume)
 
     @property
     def area(self) -> float:
-        """回傳表面積（mm²），與 build123d Part.area 相容。"""
-        try:
-            return float(self._shape.Area)
-        except Exception:
-            return 0.0
+        """回傳表面積（mm²），與 build123d Part.area 相容。同上，例外不再吞掉。"""
+        return float(self._shape.Area)
 
     def bounding_box(self):
         """回傳與 build123d 相容的 bounding box 物件。
@@ -828,38 +829,49 @@ class FreeCADAdapter:
 
         return result
 
+    def _select_edges(self, base_shape: Any, edge_selector: str) -> list:
+        """依 edge_selector 選邊——fillet/chamfer 共用（WP1-0R2 修復：
+        chamfer 原本 all/else 兩分支完全相同，edge_selector 參數被忽略是死碼）。"""
+        if edge_selector == "all":
+            return list(base_shape.Edges)
+        elif edge_selector == "top":
+            # 頂邊：Z 值最大的邊
+            max_z = max(e.Vertexes[0].Point.z for e in base_shape.Edges if e.Vertexes)
+            return [e for e in base_shape.Edges if
+                    all(abs(v.Point.z - max_z) < 0.01 for v in e.Vertexes)]
+        elif edge_selector == "vertical":
+            # 垂直邊：方向接近 Z 軸
+            edges = []
+            for e in base_shape.Edges:
+                try:
+                    t = e.tangentAt(0)
+                    if abs(t.z) > 0.9:
+                        edges.append(e)
+                except Exception:
+                    pass
+            return edges
+        return list(base_shape.Edges)
+
     def _build_fillet(
         self, feature: Feature, shapes: dict[str, Any], graph: FeatureGraph,
         trace: TopologyTrace,
     ) -> Any:
-        """圓角。"""
+        """圓角。
+
+        WP1-0R2 修復：邊選擇器參數鍵原本讀 `edge_selector`，但 build123d
+        adapter／範例專案／schema 實際用的鍵是 `edges`（見
+        `needle-box-5x10` 的 `fillet_corners`：`{"edges": "top"}`）——鍵名
+        對不上導致 freecad 引擎永遠悄悄退回 "all"，對複雜幾何（如 cell
+        grid）用小半徑對所有邊導圓角就會失敗。改讀 `edges`，`edge_selector`
+        仍保留為相容 fallback（避免任何既有呼叫端因此壞掉）。
+        """
         base_shape = shapes.get(feature.input) if feature.input else None
         if base_shape is None:
             raise ValueError(f"找不到基礎實體: {feature.input}")
 
         radius = self._get_param(feature, "radius", 2.0)
-        edge_selector = feature.parameters.get("edge_selector", "all")
-
-        # 選邊
-        if edge_selector == "all":
-            edges_to_fillet = base_shape.Edges
-        elif edge_selector == "top":
-            # 頂邊：Z 值最大的邊
-            max_z = max(e.Vertexes[0].Point.z for e in base_shape.Edges if e.Vertexes)
-            edges_to_fillet = [e for e in base_shape.Edges if
-                             all(abs(v.Point.z - max_z) < 0.01 for v in e.Vertexes)]
-        elif edge_selector == "vertical":
-            # 垂直邊：方向接近 Z 軸
-            edges_to_fillet = []
-            for e in base_shape.Edges:
-                try:
-                    t = e.tangentAt(0)
-                    if abs(t.z) > 0.9:
-                        edges_to_fillet.append(e)
-                except Exception:
-                    pass
-        else:
-            edges_to_fillet = base_shape.Edges
+        edge_selector = feature.parameters.get("edges", feature.parameters.get("edge_selector", "all"))
+        edges_to_fillet = self._select_edges(base_shape, edge_selector)
 
         if not edges_to_fillet:
             raise ValueError(f"找不到符合條件的邊: {edge_selector}")
@@ -874,18 +886,24 @@ class FreeCADAdapter:
         self, feature: Feature, shapes: dict[str, Any], graph: FeatureGraph,
         trace: TopologyTrace,
     ) -> Any:
-        """倒角。"""
+        """倒角。
+
+        WP1-0R2 修復：邊選擇器鍵同 fillet 改讀 `edges`（fallback
+        `edge_selector`）；倒角距離鍵原本讀 `distance`，但 build123d
+        adapter 讀的是 `length`——同一份 JSON 餵給兩個引擎會取到不同大小
+        的倒角。改讀 `length`，`distance` 保留為相容 fallback。
+        """
         base_shape = shapes.get(feature.input) if feature.input else None
         if base_shape is None:
             raise ValueError(f"找不到基礎實體: {feature.input}")
 
-        distance = self._get_param(feature, "distance", 1.0)
-        edge_selector = feature.parameters.get("edge_selector", "all")
+        size_key = "length" if "length" in feature.parameters else "distance"
+        distance = self._get_param(feature, size_key, 1.0)
+        edge_selector = feature.parameters.get("edges", feature.parameters.get("edge_selector", "all"))
+        edges_to_chamfer = self._select_edges(base_shape, edge_selector)
 
-        if edge_selector == "all":
-            edges_to_chamfer = base_shape.Edges
-        else:
-            edges_to_chamfer = base_shape.Edges
+        if not edges_to_chamfer:
+            raise ValueError(f"找不到符合條件的邊: {edge_selector}")
 
         try:
             result = base_shape.makeChamfer(distance, edges_to_chamfer)
@@ -897,26 +915,78 @@ class FreeCADAdapter:
         self, feature: Feature, shapes: dict[str, Any], graph: FeatureGraph,
         trace: TopologyTrace,
     ) -> Any:
-        """旋轉（headless FreeCAD 可能產生零體積實體——已知限制）。"""
+        """旋轉。
+
+        WP1-0R2 修復：舊碼旋轉軸預設 "Z"，與草圖平面完全無關——若草圖在 XY
+        平面（法向即 Z），繞 Z 軸旋轉等於繞著垂直於草圖平面的軸旋轉，輪廓
+        根本沒有掃出體積，OCC 靜默回傳零體積實體（"零體積已知限制"其實是
+        這個 axis 參數設計錯誤，不是 FreeCAD headless 的固有限制——同一組
+        資料餵給 build123d 用 axis=X 也會因為輪廓中心恰好落在旋轉軸上而
+        raise，兩引擎在退化幾何下都不該裝作成功）。
+
+        改為比照 build123d：旋轉軸一律從輸入草圖的 plane 推導（XY/XZ 平面
+        用 X 軸、YZ 平面用 Y 軸——這兩者都落在草圖平面內，才是合法的旋轉
+        軸），不再吃自由格式的 "axis" 參數。旋轉後驗證體積，退化（~0）就
+        raise，不得靜默回傳零體積「成功」。
+        """
         sketch_shape = shapes.get(feature.input) if feature.input else None
         if sketch_shape is None:
             raise ValueError(f"找不到輸入草圖: {feature.input}")
 
         angle = self._get_param(feature, "angle", 360.0)
-        axis_str = feature.parameters.get("axis", "Z")
 
-        axis_map = {
-            "X": FreeCAD.Vector(1, 0, 0),
-            "Y": FreeCAD.Vector(0, 1, 0),
-            "Z": FreeCAD.Vector(0, 0, 1),
-        }
-        axis_vec = axis_map.get(axis_str, FreeCAD.Vector(0, 0, 1))
+        input_feat = graph.get_feature(feature.input) if feature.input else None
+        plane_base = "XY"
+        if input_feat and input_feat.type == FeatureType.SKETCH:
+            plane_base = input_feat.plane.get("base", "XY")
+        axis_vec = FreeCAD.Vector(0, 1, 0) if plane_base == "YZ" else FreeCAD.Vector(1, 0, 0)
 
-        revolved = sketch_shape.revolve(FreeCAD.Vector(0, 0, 0), axis_vec, angle)
-        # FreeCAD headless revolve from Face may produce zero-volume Solid.
-        # This is a known limitation — the resulting shape is geometrically
-        # correct (has faces/edges) but lacks internal volume computation.
+        try:
+            revolved = sketch_shape.revolve(FreeCAD.Vector(0, 0, 0), axis_vec, angle)
+        except Exception as e:
+            raise ValueError(
+                f"旋轉失敗：輪廓可能與旋轉軸相交或形狀退化（{e}）"
+            )
+        if abs(revolved.Volume) < 1e-6:
+            raise ValueError(
+                "旋轉產生零體積實體——輪廓可能與旋轉軸相交（例如輪廓中心恰好"
+                "落在旋轉軸上），須調整草圖位置使輪廓完全偏離旋轉軸。"
+            )
         return revolved
+
+    def _build_shell(
+        self, feature: Feature, shapes: dict[str, Any], graph: FeatureGraph,
+        trace: TopologyTrace,
+    ) -> Any:
+        """薄殼。
+
+        WP1-0R2 新增。與 build123d adapter 對齊：目前 schema 的 `shell`
+        特徵只有 `thickness` 參數，**沒有「選面開口」參數**——build123d 端
+        呼叫 `offset(part, amount=-thickness)`、不指定 openings，實測結果
+        其實是整個實體均勻向內收縮（erosion），不是真正挖空、留有開口的
+        中空殼（沒有內壁、沒有開口）。這裡用 FreeCAD 的 `makeOffsetShape`
+        （同為「不挑面的 3D offset」）複製一致的行為以維持雙引擎 parity，
+        數值上與 build123d 的結果一致（同一個 32×45×7.5 盒子、thickness=2
+        兩邊都得到 4018mm³）。
+
+        **已知限制（誠實記錄，非本次修復範圍）**：這代表 `shell` 目前在
+        兩個引擎都不是「真正的中空殼」，schema 需要新增可選的開口面
+        選擇器才能做出有實際內部空腔、可用的殼件——這是設計層面的擴充
+        （新參數＋LLM catalog＋schema），不是單純的 FreeCAD 對齊工作，
+        故不在本次範圍內處理，留待後續討論。
+        """
+        base_shape = shapes.get(feature.input) if feature.input else None
+        if base_shape is None:
+            raise ValueError(f"找不到基礎實體: {feature.input}")
+
+        thickness = self._get_param(feature, "thickness", 1.0)
+        try:
+            result = base_shape.makeOffsetShape(-thickness, 1e-3)
+        except Exception as e:
+            raise ValueError(f"薄殼失敗（厚度 {thickness}mm 可能過大）: {e}")
+        if abs(result.Volume) < 1e-6:
+            raise ValueError(f"薄殼產生零體積實體——厚度 {thickness}mm 可能過大")
+        return result
 
     def _build_linear_pattern(
         self, feature: Feature, shapes: dict[str, Any], graph: FeatureGraph,
@@ -966,3 +1036,265 @@ class FreeCADAdapter:
             copy.translate(offset)
             result = result.fuse(copy)
         return result
+
+    # ── WP1-0R2：FreeCAD 特徵 parity 補完 ──
+
+    def _build_mirror(
+        self, feature: Feature, shapes: dict[str, Any], graph: FeatureGraph,
+        trace: TopologyTrace,
+    ) -> Any:
+        """鏡像。與 build123d adapter 對齊：固定鏡射面為 XZ 平面（法向 Y），
+        結果與來源 fuse。"""
+        base_shape = shapes.get(feature.input) if feature.input else None
+        if base_shape is None:
+            raise ValueError(f"找不到來源: {feature.input}")
+        mirrored = base_shape.mirror(FreeCAD.Vector(0, 0, 0), FreeCAD.Vector(0, 1, 0))
+        return mirrored.fuse(base_shape)
+
+    def _build_boolean_union(
+        self, feature: Feature, shapes: dict[str, Any], graph: FeatureGraph,
+        trace: TopologyTrace,
+    ) -> Any:
+        a = shapes.get(feature.references[0]) if len(feature.references) > 0 else None
+        b = shapes.get(feature.references[1]) if len(feature.references) > 1 else None
+        if a is not None and b is not None:
+            return a.fuse(b)
+        return a if a is not None else b
+
+    def _build_boolean_difference(
+        self, feature: Feature, shapes: dict[str, Any], graph: FeatureGraph,
+        trace: TopologyTrace,
+    ) -> Any:
+        a = shapes.get(feature.references[0]) if len(feature.references) > 0 else None
+        b = shapes.get(feature.references[1]) if len(feature.references) > 1 else None
+        if a is not None and b is not None:
+            return a.cut(b)
+        return a
+
+    def _build_boolean_intersection(
+        self, feature: Feature, shapes: dict[str, Any], graph: FeatureGraph,
+        trace: TopologyTrace,
+    ) -> Any:
+        a = shapes.get(feature.references[0]) if len(feature.references) > 0 else None
+        b = shapes.get(feature.references[1]) if len(feature.references) > 1 else None
+        if a is not None and b is not None:
+            # FreeCAD Part.Shape 的交集方法叫 common（不是 intersect）
+            return a.common(b)
+        return a
+
+    def _build_sweep(
+        self, feature: Feature, shapes: dict[str, Any], graph: FeatureGraph,
+        trace: TopologyTrace,
+    ) -> Any:
+        """掃描：輪廓草圖沿路徑草圖掃描成實體（與 build123d adapter 對齊的
+        input/references 慣例：input=輪廓草圖，references[0]=路徑草圖）。
+
+        路徑草圖通常是開放輪廓（不會被 `_build_sketch` 收進 shapes——見
+        `_has_closed_profile`），所以路徑改用
+        `_sketch_entity_to_edges()` 直接從路徑草圖的 sketch_entities 重建，
+        跟 `_build_sketch` 建立一般草圖用的是同一套 2D→3D 轉換。
+        """
+        profile_shape = shapes.get(feature.input) if feature.input else None
+        if profile_shape is None:
+            raise ValueError(f"找不到輪廓草圖: {feature.input}")
+
+        path_fid = feature.references[0] if feature.references else None
+        if not path_fid:
+            raise ValueError("sweep 需要 references 指定路徑草圖")
+        path_feat = graph.get_feature(path_fid)
+        if path_feat is None:
+            raise ValueError(f"找不到路徑草圖: {path_fid}")
+
+        path_plane = path_feat.plane.get("base", "XY")
+        path_edges = []
+        for entity in path_feat.sketch_entities:
+            path_edges.extend(self._sketch_entity_to_edges(entity, path_plane, 0))
+        if not path_edges:
+            raise ValueError("路徑草圖沒有可用的線段")
+        path_wire = Part.Wire(path_edges)
+
+        # makePipeShell 需要輪廓的 Wire（外框），profile_shape 若是 Face 取
+        # OuterWire；若本身已是 Wire 就直接用。
+        profile_wire = getattr(profile_shape, "OuterWire", profile_shape)
+        try:
+            result = path_wire.makePipeShell([profile_wire], True, False)
+        except Exception as e:
+            raise ValueError(f"掃描失敗: {e}")
+        return result
+
+    def _build_loft(
+        self, feature: Feature, shapes: dict[str, Any], graph: FeatureGraph,
+        trace: TopologyTrace,
+    ) -> Any:
+        """放樣：在多個輪廓草圖之間建立漸變實體（input=第一輪廓、
+        references=後續輪廓，與 build123d adapter 對齊）。"""
+        profile_ids = ([feature.input] if feature.input else []) + list(feature.references)
+        if len(profile_ids) < 2:
+            raise ValueError("loft 需要至少兩個輪廓草圖")
+
+        wires = []
+        for fid in profile_ids:
+            shape = shapes.get(fid)
+            if shape is None:
+                raise ValueError(f"找不到輪廓草圖: {fid}")
+            wires.append(getattr(shape, "OuterWire", shape))
+
+        try:
+            result = Part.makeLoft(wires, True)
+        except Exception as e:
+            raise ValueError(f"放樣失敗: {e}")
+        return result
+
+    # ── WP1-6 六型（FreeCAD 對齊 build123d，含其現有簡化行為）──
+
+    def _build_draft(
+        self, feature: Feature, shapes: dict[str, Any], graph: FeatureGraph,
+        trace: TopologyTrace,
+    ) -> Any:
+        """拔模——與 build123d adapter 對齊：目前簡化為 no-op（不改變幾何）。
+
+        完整拔模需要面選取＋拔模方向向量，超出目前 display_map 選面能力，
+        兩引擎現況一致地待後續補強（不是 FreeCAD 特有落後）。
+        """
+        base_shape = shapes.get(feature.input) if feature.input else None
+        if base_shape is None:
+            raise ValueError(f"找不到來源特徵: {feature.input}")
+        return base_shape
+
+    def _build_rib(
+        self, feature: Feature, shapes: dict[str, Any], graph: FeatureGraph,
+        trace: TopologyTrace,
+    ) -> Any:
+        """加強肋——輪廓拉伸＋fuse 到現有實體（與 build123d adapter 對齊）。"""
+        base_shape = shapes.get(feature.input) if feature.input else None
+        thickness = self._get_param(feature, "thickness", 5.0)
+        direction = feature.parameters.get("direction", "symmetric")
+
+        sketch_id = feature.parameters.get("sketch_id") or feature.input
+        sketch_feat = graph.get_feature(sketch_id) if sketch_id else None
+        if sketch_feat is None or sketch_feat.type != FeatureType.SKETCH:
+            return base_shape
+
+        sketch_shape = shapes.get(sketch_id)
+        if sketch_shape is None:
+            sketch_shape = self._build_sketch(sketch_feat, shapes, graph, trace)
+        if sketch_shape is None:
+            return base_shape
+        if isinstance(sketch_shape, Part.Wire) or (hasattr(sketch_shape, "ShapeType") and sketch_shape.ShapeType == "Wire"):
+            try:
+                sketch_shape = Part.Face(sketch_shape)
+            except Exception:
+                pass
+
+        dir_vec = self._extrude_direction(sketch_feat.plane.get("base", "XY"))
+        if direction == "symmetric":
+            rib1 = sketch_shape.extrude(dir_vec.multiply(thickness / 2))
+            rib2 = sketch_shape.extrude(dir_vec.multiply(-thickness / 2))
+            rib = rib1.fuse(rib2)
+        elif direction == "reverse":
+            rib = sketch_shape.extrude(dir_vec.multiply(-thickness))
+        else:
+            rib = sketch_shape.extrude(dir_vec.multiply(thickness))
+
+        if base_shape is not None:
+            return base_shape.fuse(rib)
+        return rib
+
+    def _build_thin(
+        self, feature: Feature, shapes: dict[str, Any], graph: FeatureGraph,
+        trace: TopologyTrace,
+    ) -> Any:
+        """薄件拉伸——拉伸時同時薄殼（與 build123d adapter 對齊；薄殼行為
+        同 `_build_shell`，是均勻內縮，非真正開口中空殼，見該處說明）。"""
+        base_shape = shapes.get(feature.input) if feature.input else None
+        length = self._get_param(feature, "length", 10.0)
+        thickness = self._get_param(feature, "thickness", 2.0)
+
+        sketch_feat = graph.get_feature(feature.input) if feature.input else None
+        if sketch_feat is None or sketch_feat.type != FeatureType.SKETCH:
+            return base_shape
+
+        sketch_shape = shapes.get(feature.input)
+        if sketch_shape is None:
+            sketch_shape = self._build_sketch(sketch_feat, shapes, graph, trace)
+        if sketch_shape is None:
+            return base_shape
+        if isinstance(sketch_shape, Part.Wire) or (hasattr(sketch_shape, "ShapeType") and sketch_shape.ShapeType == "Wire"):
+            try:
+                sketch_shape = Part.Face(sketch_shape)
+            except Exception:
+                pass
+
+        dir_vec = self._extrude_direction(sketch_feat.plane.get("base", "XY"))
+        extruded = sketch_shape.extrude(dir_vec.multiply(length))
+        try:
+            return extruded.makeOffsetShape(-thickness, 1e-3)
+        except Exception:
+            return extruded
+
+    def _extrude_direction(self, plane_base: str):
+        if plane_base == "XZ":
+            return FreeCAD.Vector(0, 1, 0)
+        elif plane_base == "YZ":
+            return FreeCAD.Vector(1, 0, 0)
+        return FreeCAD.Vector(0, 0, 1)
+
+    def _build_variable_fillet(
+        self, feature: Feature, shapes: dict[str, Any], graph: FeatureGraph,
+        trace: TopologyTrace,
+    ) -> Any:
+        """變化圓角——與 build123d adapter 對齊：目前簡化為單一半徑（取
+        radii[0]），不是逐點真正變化的圓角（兩引擎現況一致的已知簡化）。"""
+        base_shape = shapes.get(feature.input) if feature.input else None
+        if base_shape is None:
+            raise ValueError(f"找不到來源特徵: {feature.input}")
+
+        radii = feature.parameters.get("radii", [])
+        if isinstance(radii, list) and len(radii) >= 1:
+            radius = float(radii[0])
+        else:
+            radius = self._get_param(feature, "radius", 2.0)
+
+        edges = base_shape.Edges
+        if not edges:
+            return base_shape
+        try:
+            return base_shape.makeFillet(radius, edges)
+        except Exception as e:
+            raise ValueError(f"變化圓角失敗（半徑 {radius}mm 可能過大）: {e}")
+
+    def _build_countersink(
+        self, feature: Feature, shapes: dict[str, Any], graph: FeatureGraph,
+        trace: TopologyTrace,
+    ) -> Any:
+        """沉頭孔——與 build123d adapter 對齊：沉頭部分用直筒圓柱模擬（非
+        真正的錐形沉頭），是 build123d 參考實作本身的簡化，非 FreeCAD 特有
+        落後（誠實記錄於 LIMITATIONS.md，兩引擎待後續一起補真錐形）。"""
+        base_shape = shapes.get(feature.input) if feature.input else None
+        if base_shape is None:
+            raise ValueError(f"找不到來源特徵: {feature.input}")
+
+        diameter = self._get_param(feature, "diameter", 5.0)
+        countersink_diameter = self._get_param(feature, "countersink_diameter", 10.0)
+        countersink_angle = self._get_param(feature, "countersink_angle_deg", 90.0)
+        positions = feature.parameters.get("positions", [[0, 0]])
+
+        result = base_shape
+        for pos in positions:
+            if isinstance(pos, (list, tuple)) and len(pos) >= 2:
+                x, y = float(pos[0]), float(pos[1])
+                hole_cyl = Part.makeCylinder(diameter / 2, 10000, FreeCAD.Vector(x, y, -5000), FreeCAD.Vector(0, 0, 1))
+                result = result.cut(hole_cyl)
+                cs_radius = countersink_diameter / 2
+                cs_depth = (countersink_diameter - diameter) / 2 / math.tan(math.radians(countersink_angle / 2))
+                cs_cyl = Part.makeCylinder(cs_radius, cs_depth, FreeCAD.Vector(x, y, 0), FreeCAD.Vector(0, 0, 1))
+                result = result.cut(cs_cyl)
+        return result
+
+    def _build_cosmetic_thread(
+        self, feature: Feature, shapes: dict[str, Any], graph: FeatureGraph,
+        trace: TopologyTrace,
+    ) -> Any:
+        """裝飾牙線——不改變幾何，僅供顯示／標記用途（與 build123d adapter
+        對齊）。回傳 None，rebuild 沿用上一個特徵的結果。"""
+        return None

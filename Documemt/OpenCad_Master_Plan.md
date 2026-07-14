@@ -10,7 +10,7 @@
 > - 架構原理：`OpenCad_Local_AI_CAD_Architecture.md`；差距分析：`OpenCad_SolidWorks_Gap_Review_20260711.md`（下稱 Gap Review）
 > - 舊版章節對照：舊 §14 驗證方法論→**§9**；舊 §15 發包順序→**§3**；舊 §3–§5 已完成規格→Archive
 >
-> **進度速覽**：Phase 0 全✅、包 A–D✅、WP1-1/4/5✅、WP1-7 Gate✅（附打折註記）；WP1-0R 引擎接線✅但 FreeCAD 僅 9/22 特徵；✅ **WP-ENV0 完成（2026-07-14）**；⚠ **WP1-2R 後端已完成（2026-07-14，§3.2）——鐵則 3 紅線解除、真求解器、雙引擎 smoke-test 11/11，但 UIA 互動驗收待補**；下一包＝**WP1-0R2**（可並行 WP-S1／WP1-2R 的 UIA 收尾）。
+> **進度速覽**：Phase 0 全✅、包 A–D✅、WP1-1/4/5✅、WP1-7 Gate✅（附打折註記）；✅ **WP-ENV0 完成（2026-07-14）**；⚠ **WP1-2R 後端已完成（2026-07-14，§3.2）——鐵則 3 紅線解除、真求解器、雙引擎 smoke-test 11/11，UIA 互動驗收待補**；⚠ **WP1-0R2 後端已完成（2026-07-14，§3.3）——FreeCAD adapter 達 22/22 parity、三範例雙引擎 rebuild 成功，桌面 UIA smoke-test 待補**；下一包＝**WP-S1**（契約同步＋WP1-3 收尾）／或補齊 WP1-2R／WP1-0R2 的 UIA 驗收。
 >
 > **每個工作包都是獨立可發包單位**：發包時把該節全文＋§1 現況＋§2 地雷＋§9 驗證方法論一起給執行模型，不得省略。
 
@@ -116,7 +116,7 @@
 16. **Repair 安全規則**：只有「格式修正」與「唯一可推導的 reference」可自動修；改尺寸、刪特徵、重排必須人工確認；同一錯誤＋同一命令不得反覆重試；低風險自動修復上限 2 次。
 17. **FreeCAD Document 非 thread-safe**：freecad 引擎 rebuild 必須全域序列化（單一 lock）——`asyncio.to_thread` **不保證**序列化。
 18. **repo 根的 `FreeCAD/` 是 2.3GB 本機安裝**（已 gitignore），不得加進 git。FreeCAD 綁定是 cp311，**必須用它自帶 `bin\python.exe`（3.11）執行**；系統 Python 3.12 import 必失敗。
-19. **FreeCADShapeWrapper 屬性相容性**：`server.py` 呼叫 build123d 介面（`part.volume` 等）；FreeCAD 用 `.Volume/.Area/.BoundBox`——wrapper 必須轉接。另 wrapper 的 `volume` 遇例外回 0.0 會**掩蓋錯誤**（WP1-0R2 要改）。
+19. **FreeCADShapeWrapper 屬性相容性**：`server.py` 呼叫 build123d 介面（`part.volume` 等）；FreeCAD 用 `.Volume/.Area/.BoundBox`——wrapper 必須轉接。~~另 wrapper 的 `volume` 遇例外回 0.0 會掩蓋錯誤~~ ✅ 2026-07-14 WP1-0R2 已修：例外改為浮現，不再偽裝成「體積是 0」。
 20. **presigned_token 欄位名**：presign endpoint 回傳 `{"presigned_token": ...}` 非 `{"token": ...}`。
 21. ~~constraints 在 rebuild pipeline 是死資料~~ ✅ 2026-07-14 WP1-2R 已解：build123d rebuild 前用 `check_residuals()` 驗殘差、不符即 raise；FreeCAD rebuild 時真的呼叫 `solve()` 重新求解、衝突即 raise。任何繞過 solve 直接改 entities 的路徑，rebuild 現在會 fail 或自動重求解，不會再產生違反約束卻無人發現的幾何。
 22. **假綠四態——看到「全綠」先驗證跑了什麼**：(a) ~~angle/symmetric/tangent 測試只驗型別存在~~（2026-07-14 已補真實數值測試，見 `test_sketch_solver.py`）；(b) FreeCAD 測試在系統 Python 3.12 下全 skip（只有 cp311 實跑）；(c) ~~vertical-slice-a.ps1 no-op 綠燈~~（07-12 已修）；(d) `tests/prompts/test_llm_convergence.py:71` 恆真斷言＋模擬 plan 自我斷言（非真 gateway），且 `tests/prompts` 不在 pytest.ini testpaths **預設根本不跑**。驗收報告必須註明引擎、Python 版本、實際收集的測試數。**新增 (e)**：`vertical-slice-a.ps1` step 7 的 DOF 斷言目前仍走抽象成本表路徑（sketch entity 沒有真實 id、約束引用的 e0/e1 不對應任何實體），不是走 WP1-2R 的 Jacobian 求解器——同一份「全綠」報告底下可能同時有真驗證與掛名驗證，逐條看清楚在測什麼。
@@ -132,7 +132,7 @@
 |---|---|---|---|
 | 0 | ~~WP-ENV0 環境與測試基礎修復~~（§3.1） | 無 | ✅ 完成（2026-07-14） |
 | 1 | **WP1-2R 真求解器**（§3.2） | WP-ENV0 | ⚠ 後端完成（2026-07-14）／UIA 互動驗收待補——解除鐵則 3 紅線 |
-| 2 | **WP1-0R2 FreeCAD 特徵 parity**（§3.3） | WP1-2R 後端（已滿足） | 補 13 特徵＋修 chamfer/revolve/volume＋誠實矩陣 |
+| 2 | **WP1-0R2 FreeCAD 特徵 parity**（§3.3） | WP1-2R 後端（已滿足） | ⚠ 後端完成（2026-07-14）／桌面 UIA smoke-test 待補——22/22 特徵＋誠實矩陣 |
 | 3 | **WP-S1 契約同步＋WP1-3 收尾**（§3.4）／可與 1、2 並行 | WP-ENV0 | C#↔Python↔schema 對稱、datum 去佔位、假綠清理、檔案家務 |
 | 4 | **WP-H1 殘項：真 gateway 端到端＋Gate 補強**（§3.5） | WP-ENV0 | tests/prompts 真實化、vertical-slice step 2/9 補強 |
 | 5 | Phase 2 各包（§4，發包前出終稿）→ Phase 3（§5）→ Phase 4（§6） | 0–4 全過 | — |
@@ -190,18 +190,35 @@
 - ⬜ UIA 畫矩形→約束→DOF=0「完全定義」（未做，見上）
 - ⬜ 拖曳欠約束跟隨、fully constrained 不動（未做，見上）
 
-### 3.3 WP1-0R2：FreeCAD 特徵 parity
+### 3.3 WP1-0R2：FreeCAD 特徵 parity ⚠ 後端已完成（2026-07-14）／桌面 UIA smoke-test 待補
 
-**現況問題**（Addendum §2.2）：freecad adapter 僅 9/22；`FREECAD_ADAPTER_LIMITATIONS.md` 宣稱 "largely feature-complete" 不實。
+**現況問題（修復前）**（Addendum §2.2）：freecad adapter 僅 9/22；`FREECAD_ADAPTER_LIMITATIONS.md` 宣稱 "largely feature-complete" 不實。
 
-**工作項**：
-1. 補 13 個缺失特徵，優先序：`shell`（擋 esp32cam-enclosure／needle-box-5x10 兩個範例的 smoke-test）→ `sweep/loft/mirror/boolean_union/boolean_difference/boolean_intersection` → WP1-6 六型。
-2. 修既有 bug：`_build_chamfer` edge_selector 死碼（:795-798，if/else 相同）；`_build_revolve` 零體積（改 PartDesign 或 OCC 直接 API）；`FreeCADShapeWrapper.volume` 例外回 0.0 改為浮現錯誤（地雷 #19）。
-3. golden tests 參數化雙引擎（`OPENCAD_ENGINE` fixture）；WP1-6 六型 golden 補 freecad。
-4. **改寫 `FREECAD_ADAPTER_LIMITATIONS.md` 為誠實矩陣**（逐特徵：implemented/partial/missing＋證據）。
-5. freecad 引擎 smoke-test＋vertical-slice 全綠後，才開「切預設引擎」的討論。
+**已完成（2026-07-14）**：
+1. ✅ 補齊全部 13 個缺失特徵：`shell`（先做，見下）、`sweep`、`loft`、`mirror`、`boolean_union/difference/intersection`、WP1-6 六型（`draft`/`rib`/`thin`/`variable_fillet`/`countersink`/`cosmetic_thread`）。freecad adapter 現在 **22/22**。
+2. ✅ 修既有 3 個 bug：
+   - `_build_chamfer` edge_selector 死碼（all/else 兩分支完全相同）——改共用 `_select_edges()`（fillet/chamfer 都支援 all/top/vertical）。
+   - `_build_revolve` 零體積——根因不是「headless 固有限制」，是舊碼旋轉軸讀自由格式 `axis` 參數（預設 Z），跟草圖平面無關；改為軸一律從草圖 plane 推導（同 build123d：XY/XZ→X 軸，YZ→Y 軸），且退化（零體積）時 raise，不再靜默「成功」。同一組退化測資餵給 build123d 用相同軸也會 raise——證實這是**資料幾何本身無效**（輪廓中心恰好落在旋轉軸上），不是引擎限制。
+   - `FreeCADShapeWrapper.volume`/`.area` 例外回 0.0（地雷 #19）——改為讓例外浮現，不再把「算不出體積」偽裝成「體積真的是 0」。
+3. **加碼發現＋順手修的 2 個新 bug**（不在原規劃清單，實測 `needle-box-5x10` rebuild 失敗才發現）：fillet/chamfer 的邊選擇器參數鍵原本讀 `edge_selector`，但 build123d／範例專案／schema 實際用的鍵是 `edges`——鍵名對不上，freecad 引擎的 `edges: "top"` selector 一直悄悄失效退回 "all"；chamfer 的距離參數鍵原本讀 `distance`，build123d 讀 `length`，同一份 JSON 兩引擎會取到不同倒角大小。兩者都改讀正確鍵名（舊鍵留作相容 fallback）。
+4. ✅ golden tests 雙引擎參數化：`tests/cad-worker/test_golden_model.py` 新增 `golden_adapter` fixture（`params=["build123d","freecad"]`），三個範例專案（NEMA17/needle-box/esp32cam）的 golden test 現在雙引擎各跑一次；freecad 不可用時該參數 skip（非 fail）。
+5. ✅ **`FREECAD_ADAPTER_LIMITATIONS.md` 全文重寫為誠實矩陣**：22 型逐一列 implemented/partial＋證據；同時發現並記錄 shell/thin（均勻收縮非真開口殼）、variable_fillet（單一半徑）、countersink（直筒非錐形）、draft（no-op）**這四項其實 build123d 自己也是同等簡化**，本次是把 FreeCAD 對齊到相同水準、不是把 FreeCAD 拉低於 build123d，但仍誠實記錄為兩引擎共通的功能缺口，列為後續獨立項目（非本次範圍）。
 
-**驗收**：22 型雙引擎 golden 全綠（§9.8 判準）；三個範例專案 freecad 引擎 rebuild 成功；freecad smoke-test PASS；LIMITATIONS.md 與實作逐條相符。
+**回歸驗證（2026-07-14 實跑）**：
+- `test_freecad_adapter.py`：52/52（cp311，含本次新增 22 型全覆蓋測試）。
+- `test_golden_model.py`：51/51（system Python：29 build123d-only ＋ 22 dual-engine 中 build123d 半數過、freecad 半數 skip；cp311：全部 51 皆實跑過）。三個範例專案雙引擎體積：NEMA17 build123d 20345.58 / freecad 19434.45（差異~4.5%，fillet 拓樸差異，非錯誤）；needle-box freecad 91473.28（<100000 判準內，5 特徵全成功，含先前失敗的 fillet_corners）；esp32cam freecad 3537.68（<8000 判準內，6 特徵全成功）。
+- 系統 Python 全套：926 passed/68 skipped；cp311 全套：976 passed/2 skipped；`dotnet test`：138/138（未動 C#，抽查未回歸）。
+
+**已知殘缺（誠實記錄，未列入本次「完成」）**：
+- **桌面 UIA smoke-test 未跑**：`tests/ui/smoke-test.ps1 -Engine freecad` 會啟動真實 Avalonia 視窗並控制實體滑鼠/鍵盤，本次未執行（與 WP1-2R 的 UIA 驗收缺口同性質）——HTTP／pytest 層級的雙引擎驗證已完整覆蓋本包的核心變更，但這條原始驗收項仍待找機會實跑。
+- shell/thin/variable_fillet/countersink/draft 四項「兩引擎同等簡化」問題已誠實記錄於 LIMITATIONS.md，但未修復（修復需要 schema／LLM catalog 層級的設計擴充，超出「達成 parity」的本次範圍）。
+- 「切預設引擎」的討論（原工作項 5）因桌面 UIA smoke-test 未跑，尚未開啟。
+
+**驗收**（打勾者已完成）：
+- ✅ 22 型雙引擎 golden 全綠（§9.8 判準）
+- ✅ 三個範例專案 freecad 引擎 rebuild 成功
+- ⬜ freecad 桌面 UIA smoke-test PASS（未跑，見上）
+- ✅ LIMITATIONS.md 與實作逐條相符（含誠實揭露的四項共通簡化）
 
 ### 3.4 WP-S1：契約同步＋WP1-3 收尾（小刀多把，可並行）
 
