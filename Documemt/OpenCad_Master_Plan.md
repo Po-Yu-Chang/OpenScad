@@ -10,7 +10,7 @@
 > - 架構原理：`OpenCad_Local_AI_CAD_Architecture.md`；差距分析：`OpenCad_SolidWorks_Gap_Review_20260711.md`（下稱 Gap Review）
 > - 舊版章節對照：舊 §14 驗證方法論→**§9**；舊 §15 發包順序→**§3**；舊 §3–§5 已完成規格→Archive
 >
-> **進度速覽**：Phase 0 全✅、包 A–D✅、WP1-1/4/5✅、WP1-7 Gate✅（附打折註記）；✅ **WP-ENV0 完成（2026-07-14）**；⚠ **WP1-2R 後端已完成（2026-07-14，§3.2）——鐵則 3 紅線解除、真求解器、雙引擎 smoke-test 11/11，UIA 互動驗收待補**；⚠ **WP1-0R2 後端已完成（2026-07-14，§3.3）——FreeCAD adapter 達 22/22 parity、三範例雙引擎 rebuild 成功，桌面 UIA smoke-test 待補**；⚠ **WP-S1 後端已完成（2026-07-14，§3.4）——C#↔Python 契約對稱、datum 真 BREP 解析＋雙引擎草圖平面＋真選面 UI、假綠與家務清理，UIA 互動驗收待補**；下一包＝**WP-H1 殘項**（§3.5，真 gateway 端到端）／或一次補齊 WP1-2R／WP1-0R2／WP-S1 累積的 UIA 驗收。
+> **進度速覽**：Phase 0 全✅、包 A–D✅、WP1-1/4/5✅、WP1-7 Gate✅（附打折註記）；✅ **WP-ENV0 完成（2026-07-14）**；⚠ **WP1-2R 後端已完成（2026-07-14，§3.2）——鐵則 3 紅線解除、真求解器、雙引擎 smoke-test 11/11，UIA 互動驗收待補**；⚠ **WP1-0R2 後端已完成（2026-07-14，§3.3）——FreeCAD adapter 達 22/22 parity、三範例雙引擎 rebuild 成功，桌面 UIA smoke-test 待補**；⚠ **WP-S1 後端已完成（2026-07-14，§3.4）——C#↔Python 契約對稱、datum 真 BREP 解析＋雙引擎草圖平面＋真選面 UI、假綠與家務清理，UIA 互動驗收待補**；⚠ **WP-H1 殘項機制已完成（2026-07-14，§3.5）——真 gateway 測試框架＋vertical-slice step 2/9 補強，本機無 LLM provider 故真實 5 條輸出證據待補**；Phase 1 主線工作包**全數發完**；下一步＝使用者設定真 LLM provider 補齊 WP-H1 實測證據，或一次補齊四包累積的 UIA 互動驗收，或視情況開 Phase 2。
 >
 > **每個工作包都是獨立可發包單位**：發包時把該節全文＋§1 現況＋§2 地雷＋§9 驗證方法論一起給執行模型，不得省略。
 
@@ -134,7 +134,7 @@
 | 1 | **WP1-2R 真求解器**（§3.2） | WP-ENV0 | ⚠ 後端完成（2026-07-14）／UIA 互動驗收待補——解除鐵則 3 紅線 |
 | 2 | **WP1-0R2 FreeCAD 特徵 parity**（§3.3） | WP1-2R 後端（已滿足） | ⚠ 後端完成（2026-07-14）／桌面 UIA smoke-test 待補——22/22 特徵＋誠實矩陣 |
 | 3 | **WP-S1 契約同步＋WP1-3 收尾**（§3.4） | WP-ENV0 | ⚠ 後端完成（2026-07-14）／UIA 互動驗收待補——C#↔Python↔schema 對稱、datum 真 BREP 解析、假綠清理 |
-| 4 | **WP-H1 殘項：真 gateway 端到端＋Gate 補強**（§3.5） | WP-ENV0 | tests/prompts 真實化、vertical-slice step 2/9 補強 |
+| 4 | **WP-H1 殘項：真 gateway 端到端＋Gate 補強**（§3.5） | WP-ENV0 | ⚠ 機制完成（2026-07-14）／真實 5 條輸出待補（需設定 LLM provider）——tests/prompts 真實化、vertical-slice step 2/9 補強 |
 | 5 | Phase 2 各包（§4，發包前出終稿）→ Phase 3（§5）→ Phase 4（§6） | 0–4 全過 | — |
 
 ### 3.1 WP-ENV0：環境與測試基礎修復 ✅（2026-07-14 完成，僅剩 push）
@@ -251,12 +251,24 @@
 - ✅ 恆真斷言消失
 - ✅ `git status` 乾淨（commit 後）
 
-### 3.5 WP-H1 殘項：真 gateway 端到端＋Gate 補強
+### 3.5 WP-H1 殘項：真 gateway 端到端＋Gate 補強 ⚠ 機制已完成（2026-07-14）／真 gateway 實測證據待補（需使用者設定 provider）
 
-1. `tests/prompts/` 加真實 LiteLLM gateway 案例（無 LLM 環境 skip）：缺尺寸提問、歧義要求點選、不支援拒絕、防偷換（「螺旋齒輪」→拒絕）、多輪指涉；TPM 內 token 量測。
-2. `vertical-slice-a.ps1` **step 2 真 LLM plan 語意等價**（現為 apply_plan identity 比對，無 LLM）——LLM 生成 plan 與 typed plan 比對語意欄位；無 gateway 時標 SKIP 並在報告註明（不得 PASS）。
-3. **step 9 快照加 parameters 比對**（現只比 feature_id/type/name/input，掉尺寸也會過）。
-**驗收**：真 gateway 實測 5 條輸出貼報告；step 2/9 強化後雙引擎重跑 11/11。
+**已完成**：
+1. ✅ `tests/prompts/gateway_client.py`（新增）：真的呼叫 LiteLLM/OpenAI-compatible gateway 的 HTTP client，契約與 `src/OpenCad.Llm/OpenAiCompatibleLlmProvider.cs` 對齊（`POST {base_url}/chat/completions`、`response_format=json_object`＋400/422 fallback、`choices[0].message.content` 解析＋去 code fence）。讀 `~/.opencad/settings.json`：`provider` 不是 `openai`/`auto` 或沒有 `base_url` 一律視為「無 gateway」。
+2. ✅ `tests/prompts/test_gateway_e2e.py`（新增）：9 個純邏輯測試（設定檔解析、JSON 圍欄剝除，不需網路，一定會跑）＋ 5 個真 gateway 案例（缺尺寸提問、歧義要求點選、不支援拒絕、防偷換「螺旋齒輪」、多輪指涉）——用 `require_gateway()` 在無 gateway 時乾淨 `pytest.skip`，不 fail 也不假裝 PASS。
+3. ✅ `vertical-slice-a.ps1` **step 2**：新增 `Get-GatewayConfig`/`Invoke-Gateway`（PowerShell 版同一套 HTTP 契約），原本的 apply_plan identity 比對（無 LLM 參與）改為：有真 gateway 就送自然語言需求給 LLM、比對生成 plan 的語意欄位（width/height/plane.base）；沒有就用新增的 `Step-Skip` 明確標 SKIP（新增 `$Result.Skip` 計數，摘要／exit code 邏輯一併調整，SKIP 不算 PASS 也不算 FAIL）。
+4. ✅ **step 9** 快照加 `parameters` 欄位比對（原本只比 `feature_id/type/name/input`，掉尺寸也會過）。
+
+**已知限制（誠實記錄，非本次能解決）**：**驗收條件「真 gateway 實測 5 條輸出貼報告」無法在本次完成**——本機 `~/.opencad/settings.json` 是 `llm.provider = "none"`，沒有配置任何真實 LLM gateway，所有 5 個真 gateway 案例與 `vertical-slice-a.ps1` step 2 都正確地走 skip 路徑（機制驗證為「正確識別無 gateway 並誠實 skip」，不是「真的測過 LLM 行為」）。要拿到真實輸出證據，需要使用者在 `~/.opencad/settings.json` 設定一個真的 `provider`（`openai` 或 `auto`）＋`base_url`＋`api_key`＋`model`，之後重跑 `pytest tests/prompts/test_gateway_e2e.py -v` 與 `vertical-slice-a.ps1` 即可自動從 SKIP 轉為真實 PASS/FAIL。
+
+**回歸驗證（2026-07-14 實跑，本機無 gateway）**：
+- `test_gateway_e2e.py`：9 passed（純邏輯）／5 skipped（真 gateway，附原因）。
+- 系統 Python 全套：938 passed/75 skipped（含新測試）。
+- `vertical-slice-a.ps1` 雙引擎重跑：build123d／freecad 皆 **10 PASS／0 FAIL／1 SKIP**（step 2），`[OK*] Phase 1 Gate PASSED with 1 SKIP`——沒有 FAIL，但誠實反映不是全綠，不再是舊版「11/11 全綠」的名不副實。
+
+**驗收**（打勾者已完成）：
+- ⬜ 真 gateway 實測 5 條輸出貼報告（機制已建、待使用者設定 provider 後補測）
+- ✅ step 2/9 強化後雙引擎重跑（10 PASS/0 FAIL/1 SKIP，符合「無 gateway 時 SKIP 不得 PASS」的判準）
 
 ---
 

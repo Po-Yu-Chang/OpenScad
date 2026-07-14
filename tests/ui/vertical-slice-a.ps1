@@ -29,7 +29,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
-$Result = @{ Step = @(); Pass = 0; Fail = 0; Failures = @() }
+$Result = @{ Step = @(); Pass = 0; Fail = 0; Skip = 0; Failures = @() }
 
 function Step-Check {
     param([string]$Name, [bool]$Condition, [string]$Detail = "")
@@ -42,6 +42,96 @@ function Step-Check {
         $Result.Fail++
         $Result.Failures += $Name
     }
+}
+
+function Step-Skip {
+    <# WP-H1：明確標 SKIP（不算 PASS 也不算 FAIL）——真 gateway 未設定時的
+       誠實狀態，不得偷偷算成 PASS 湊數。#>
+    param([string]$Name, [string]$Reason = "")
+    Write-Host "  [SKIP] $Name $Reason" -ForegroundColor Yellow
+    $Result.Step += @{ Name = $Name; Status = "SKIP"; Detail = $Reason }
+    $Result.Skip++
+}
+
+function Get-GatewayConfig {
+    <# WP-H1：讀 ~/.opencad/settings.json 的 llm 設定。provider 不是
+       openai/auto，或沒有 base_url，一律回傳 $null（代表沒有可用的真
+       gateway）。與 tests/prompts/gateway_client.py 的 load_gateway_config
+       走同一套判斷規則，兩邊都要能正確辨識「有沒有真 gateway 可用」。 #>
+    $settingsPath = Join-Path $env:USERPROFILE ".opencad\settings.json"
+    if (-not (Test-Path $settingsPath)) { return $null }
+    try {
+        $settings = Get-Content $settingsPath -Raw | ConvertFrom-Json
+    } catch {
+        return $null
+    }
+    $llm = $settings.llm
+    if (-not $llm) { return $null }
+    $provider = if ($llm.provider) { $llm.provider } else { "none" }
+    if ($provider -ne "openai" -and $provider -ne "auto") { return $null }
+    if (-not $llm.base_url) { return $null }
+    return @{
+        BaseUrl = $llm.base_url.TrimEnd("/")
+        ApiKey  = $llm.api_key
+        Model   = $llm.model
+    }
+}
+
+function Invoke-Gateway {
+    <# WP-H1：呼叫真 LiteLLM/OpenAI-compatible gateway，回傳解析後的 JSON
+       物件。契約與 src/OpenCad.Llm/OpenAiCompatibleLlmProvider.cs 對齊：
+       POST {base_url}/chat/completions，response_format=json_object，
+       400/422 時退回不帶此欄位重試一次；回應在
+       choices[0].message.content，需要剝除 ```json 圍欄。 #>
+    param(
+        [Parameter(Mandatory)] $Config,
+        [Parameter(Mandatory)][string]$SystemPrompt,
+        [Parameter(Mandatory)][string]$UserPrompt,
+        [array]$History = @()
+    )
+    $gwHeaders = @{ "Content-Type" = "application/json" }
+    if ($Config.ApiKey) { $gwHeaders["Authorization"] = "Bearer $($Config.ApiKey)" }
+
+    $messages = @(@{ role = "system"; content = $SystemPrompt })
+    $messages += $History
+    $messages += @{ role = "user"; content = $UserPrompt }
+
+    $body = @{
+        model = $Config.Model
+        messages = $messages
+        response_format = @{ type = "json_object" }
+        temperature = 0.1
+    }
+    $url = "$($Config.BaseUrl)/chat/completions"
+    try {
+        $resp = Invoke-RestMethod -Uri $url -Method Post -Body ($body | ConvertTo-Json -Depth 10) -ContentType "application/json" -Headers $gwHeaders -TimeoutSec 120
+    } catch {
+        # 400/422（gateway 不支援 response_format）退回不帶此欄位重試一次
+        $statusCode = $_.Exception.Response.StatusCode.value__
+        if ($statusCode -eq 400 -or $statusCode -eq 422) {
+            $body.Remove("response_format")
+            $resp = Invoke-RestMethod -Uri $url -Method Post -Body ($body | ConvertTo-Json -Depth 10) -ContentType "application/json" -Headers $gwHeaders -TimeoutSec 120
+        } else {
+            throw
+        }
+    }
+    $content = $resp.choices[0].message.content
+    # 剝除 markdown code fence（三個反引號），取第一個 { 到最後一個 }
+    $fence = [string][char]96 + [char]96 + [char]96
+    $text = $content.Trim()
+    if ($text.StartsWith($fence)) {
+        $lines = $text -split "`n", 2
+        $text = if ($lines.Count -gt 1) { $lines[1] } else { $text }
+        if ($text.TrimEnd().EndsWith($fence)) {
+            $text = $text.Substring(0, $text.LastIndexOf($fence))
+        }
+    }
+    $start = $text.IndexOf("{")
+    $end = $text.LastIndexOf("}")
+    if ($start -eq -1 -or $end -eq -1 -or $end -lt $start) {
+        throw "回應中找不到 JSON 物件：$($text.Substring(0, [Math]::Min(300, $text.Length)))"
+    }
+    return ($text.Substring($start, $end - $start + 1) | ConvertFrom-Json)
 }
 
 function Get-WorkerPython {
@@ -153,22 +243,39 @@ try {
         Step-Check "Step 1: L-bracket sketch (constrained)" $false $_.Exception.Message
     }
 
-    # ─── 步驟 2：typed plan 走 apply_plan＋語意等價 ───
-    try {
-        $resp2 = Invoke-RestMethod -Uri "$ServerUrl/api/projects" -Method Post -Body (@{name="L-bracket-plan"; description="VSA step2"; units="mm"} | ConvertTo-Json) -ContentType "application/json" -Headers $headers
-        $planProjectId = $resp2.project_id
-        $planBody = @{
-            commands = @(@{ schema_version = "1.0"; action = "create_feature"; feature = $sketchFeature })
-            plan_label = "llm-equiv"
-        } | ConvertTo-Json -Depth 10
-        $null = Invoke-RestMethod -Uri "$ServerUrl/api/projects/$planProjectId/apply_plan" -Method Post -Body $planBody -ContentType "application/json" -Headers $headers
-        $planGraph = Invoke-RestMethod -Uri "$ServerUrl/api/projects/$planProjectId" -Method Get -Headers $headers
-        $planSk = $planGraph.features.features | Where-Object { $_.feature_id -eq "sk1" }
-        $ent = $planSk.sketch_entities[0]
-        $equiv = ($ent.width -eq 60) -and ($ent.height -eq 40) -and ($planSk.plane.base -eq "XY")
-        Step-Check "Step 2: typed plan semantic equivalence" $equiv "width=$($ent.width) height=$($ent.height) plane=$($planSk.plane.base)"
-    } catch {
-        Step-Check "Step 2: typed plan semantic equivalence" $false $_.Exception.Message
+    # ─── 步驟 2：真 LLM 生成 plan，語意欄位跟 typed plan 比對 ───
+    # WP-H1 修復：原本沒有 LLM 參與——把同一個寫死的 $sketchFeature 送
+    # apply_plan 再跟自己的常數比對，只證明 apply_plan 端點能跑，不是「LLM
+    # plan 語意等價」。改為：有設定真 gateway 就真的送一句自然語言需求給
+    # LLM，比對它生出的 typed plan 語意欄位（width/height/plane.base）跟
+    # 期望值是否一致；沒設定 gateway 就明確 SKIP（不得 PASS）。
+    $gwConfig = Get-GatewayConfig
+    if (-not $gwConfig) {
+        Step-Skip "Step 2: LLM plan semantic equivalence" "沒有設定真 gateway（~/.opencad/settings.json 的 llm.provider 須為 openai/auto 且有 base_url）——Master Plan §3.5 允許無 LLM 環境 skip，不得 PASS"
+    } else {
+        try {
+            $systemPrompt = @"
+你是 OpenCad 的 AI 建模助手。將使用者需求轉換成 CAD 命令 JSON。
+sketch 特徵必須指定 plane.base：XY/XZ/YZ。sketch_entities 用 rectangle 時填 width/height（mm）。
+輸出必須是合法 JSON，符合 schema：
+{"type":"object","properties":{"steps":{"type":"array","items":{"type":"object","properties":{"description":{"type":"string"},"feature_type":{"type":"string"},"parameters":{"type":"object"},"sketch_entities":{"type":"array"},"plane":{"type":"object"}}}},"summary":{"type":"string"}},"required":["steps","summary"]}
+"@
+            $userPrompt = "在 XY 基準面上畫一個 60mm x 40mm 的矩形草圖。"
+            $plan = Invoke-Gateway -Config $gwConfig -SystemPrompt $systemPrompt -UserPrompt $userPrompt
+            $sketchStep = $plan.steps | Where-Object { $_.feature_type -eq "sketch" } | Select-Object -First 1
+            if (-not $sketchStep) {
+                Step-Check "Step 2: LLM plan semantic equivalence" $false "回應沒有 sketch 步驟：$($plan | ConvertTo-Json -Depth 5 -Compress)"
+            } else {
+                $rectEnt = $sketchStep.sketch_entities | Where-Object { $_.type -eq "rectangle" -or $_.entity_type -eq "rectangle" } | Select-Object -First 1
+                $planeBase = if ($sketchStep.plane.base) { $sketchStep.plane.base } else { "XY" }
+                $w = if ($rectEnt.width) { $rectEnt.width } else { $rectEnt.parameters.width }
+                $h = if ($rectEnt.height) { $rectEnt.height } else { $rectEnt.parameters.height }
+                $equiv = ($w -eq 60) -and ($h -eq 40) -and ($planeBase -eq "XY")
+                Step-Check "Step 2: LLM plan semantic equivalence" $equiv "width=$w height=$h plane=$planeBase"
+            }
+        } catch {
+            Step-Check "Step 2: LLM plan semantic equivalence" $false $_.Exception.Message
+        }
     }
 
     # ─── 步驟 3：Pad 成 3D ───
@@ -266,8 +373,11 @@ try {
     # ─── 步驟 9：真實重啟 server → 讀回一致 ───
     try {
         if (-not $SkipServerStart) {
+            # WP-H1 修復：原本快照只比 feature_id/type/name/input，掉尺寸
+            # （如 parameters.length 被存檔/重啟過程弄壞）也會被判 PASS。
+            # 加入 parameters 之後，任何參數在存檔/重啟循環中遺失都能被抓到。
             $snapBefore = (Invoke-RestMethod -Uri "$ServerUrl/api/projects/$projectId" -Method Get -Headers $headers).features.features |
-                Sort-Object feature_id | Select-Object feature_id, type, name, input | ConvertTo-Json -Depth 5
+                Sort-Object feature_id | Select-Object feature_id, type, name, input, parameters | ConvertTo-Json -Depth 6
 
             if ($serverProcess -and -not $serverProcess.HasExited) {
                 Stop-Process -Id $serverProcess.Id -Force
@@ -284,7 +394,7 @@ try {
                 $serverProcess = $restarted.Process
                 $headers = @{ "X-Session-Token" = $restarted.Token }
                 $snapAfter = (Invoke-RestMethod -Uri "$ServerUrl/api/projects/$projectId" -Method Get -Headers $headers).features.features |
-                    Sort-Object feature_id | Select-Object feature_id, type, name, input | ConvertTo-Json -Depth 5
+                    Sort-Object feature_id | Select-Object feature_id, type, name, input, parameters | ConvertTo-Json -Depth 6
                 # 重開後重建一次（正常使用流程）——後續 export 需要記憶體中的已建模型
                 $rebuilt = Invoke-RestMethod -Uri "$ServerUrl/api/projects/$projectId/rebuild" -Method Post -Headers $headers
                 Step-Check "Step 9: Save/close/reload consistency" (($snapBefore -eq $snapAfter) -and ($rebuilt.status -eq "success"))
@@ -321,15 +431,22 @@ try {
     }
 
     # ─── 結果摘要 ───
+    $totalSteps = $Result.Pass + $Result.Fail + $Result.Skip
     Write-Host "`n=== Results (engine=$Engine) ===" -ForegroundColor Cyan
-    Write-Host "  Pass: $($Result.Pass) / $($Result.Pass + $Result.Fail)" -ForegroundColor Green
-    Write-Host "  Fail: $($Result.Fail) / $($Result.Pass + $Result.Fail)" -ForegroundColor $(if ($Result.Fail -eq 0) { 'Gray' } else { 'Red' })
+    Write-Host "  Pass: $($Result.Pass) / $totalSteps" -ForegroundColor Green
+    Write-Host "  Fail: $($Result.Fail) / $totalSteps" -ForegroundColor $(if ($Result.Fail -eq 0) { 'Gray' } else { 'Red' })
+    if ($Result.Skip -gt 0) {
+        Write-Host "  Skip: $($Result.Skip) / $totalSteps（見下方 SKIP 明細——不算 PASS，也不算 FAIL）" -ForegroundColor Yellow
+        $Result.Step | Where-Object { $_.Status -eq "SKIP" } | ForEach-Object { Write-Host "    - $($_.Name): $($_.Detail)" -ForegroundColor Yellow }
+    }
     if ($Result.Failures.Count -gt 0) {
         Write-Host "`n  Failed Steps:" -ForegroundColor Red
         $Result.Failures | ForEach-Object { Write-Host "    - $_" -ForegroundColor Red }
     }
-    if ($Result.Fail -eq 0) {
+    if ($Result.Fail -eq 0 -and $Result.Skip -eq 0) {
         Write-Host "`n  [OK] Phase 1 Gate PASSED — all steps green." -ForegroundColor Green
+    } elseif ($Result.Fail -eq 0) {
+        Write-Host "`n  [OK*] Phase 1 Gate PASSED with $($Result.Skip) SKIP — 沒有 FAIL，但不是全綠，見上方 SKIP 明細。" -ForegroundColor Yellow
     } else {
         Write-Host "`n  [X] Phase 1 Gate FAILED — $($Result.Fail) step(s) failed." -ForegroundColor Red
     }
