@@ -36,6 +36,7 @@ except ImportError as _e:
     _FREECAD_IMPORT_ERROR = str(_e)
 
 from ..feature_graph import FeatureGraph, Feature, FeatureState, FeatureType, ParameterValue
+from ..sketch_solver import Constraint as _SketchConstraint, solve as _solve_sketch_constraints
 
 
 class BuildResult(NamedTuple):
@@ -457,9 +458,26 @@ class FreeCADAdapter:
         if not has_closed:
             return None
 
+        # WP1-2R 紅線修復：FreeCAD 引擎有真正的座標求解能力（cp311 路徑），
+        # 若草圖帶 constraints，rebuild 前必須重新求解——不得沿用可能已過期
+        # 的座標。求解衝突（互斥約束）時中止 rebuild，而非靜默忽略約束。
+        entities_to_build = feature.sketch_entities
+        if feature.constraints:
+            solved = _solve_sketch_constraints(
+                feature.sketch_entities,
+                [_SketchConstraint.from_dict(c) for c in feature.constraints],
+            )
+            if solved["solver_status"]["state"] == "over":
+                raise ValueError(
+                    f"草圖 {feature.feature_id} 約束衝突"
+                    f"（衝突: {solved['solver_status']['conflicts']}）——"
+                    f"rebuild 中止，不使用未收斂座標。請刪除衝突約束後重試。"
+                )
+            entities_to_build = solved["entities"]
+
         # 收集草圖實體的幾何
         edges = []
-        for entity in feature.sketch_entities:
+        for entity in entities_to_build:
             entity_edges = self._sketch_entity_to_edges(entity, plane_base, plane_offset)
             edges.extend(entity_edges)
 
@@ -607,17 +625,89 @@ class FreeCADAdapter:
             y2 = self._raw_mm(params.get("y2", 0))
             edges = [Part.makeLine(to_3d(x1, y1), to_3d(x2, y2))]
 
+        elif etype == "arc":
+            # WP1-2R：與 build123d adapter 對齊——freecad 先前缺這個分支
+            cx = self._raw_mm(params.get("center_x", params.get("x", 0)))
+            cy = self._raw_mm(params.get("center_y", params.get("y", 0)))
+            r = self._raw_mm(params.get("radius", params.get("r", 5)))
+            start_angle = float(params.get("start_angle", 0))
+            end_angle = float(params.get("end_angle", 90))
+            center = to_3d(cx, cy)
+            if plane_base == "XZ":
+                normal = FreeCAD.Vector(0, 1, 0)
+            elif plane_base == "YZ":
+                normal = FreeCAD.Vector(1, 0, 0)
+            else:
+                normal = FreeCAD.Vector(0, 0, 1)
+            try:
+                edges = [Part.makeCircle(r, center, normal, start_angle, end_angle)]
+            except Exception:
+                pass
+
         return edges
 
+    def _line_arc_endpoints(self, entity: dict[str, Any]) -> tuple[tuple[float, float], tuple[float, float]] | None:
+        """算出 line/arc 實體的兩端點座標，供閉合輪廓偵測用（與 build123d
+        adapter 對齊）。"""
+        etype = entity.get("entity_type") or entity.get("type")
+        params = entity.get("parameters", entity)
+        if etype == "line":
+            x1 = self._raw_mm(params.get("x1", 0))
+            y1 = self._raw_mm(params.get("y1", 0))
+            x2 = self._raw_mm(params.get("x2", 10))
+            y2 = self._raw_mm(params.get("y2", 0))
+            return (x1, y1), (x2, y2)
+        if etype == "arc":
+            cx = self._raw_mm(params.get("center_x", params.get("x", 0)))
+            cy = self._raw_mm(params.get("center_y", params.get("y", 0)))
+            r = self._raw_mm(params.get("radius", params.get("r", 5)))
+            start_rad = math.radians(float(params.get("start_angle", 0)))
+            end_rad = math.radians(float(params.get("end_angle", 90)))
+            p1 = (cx + math.cos(start_rad) * r, cy + math.sin(start_rad) * r)
+            p2 = (cx + math.cos(end_rad) * r, cy + math.sin(end_rad) * r)
+            return p1, p2
+        return None
+
+    @staticmethod
+    def _segments_form_closed_loop(segments: list[tuple[tuple[float, float], tuple[float, float]]], tol: float = 1e-4) -> bool:
+        """端點兩兩配對即視為封閉迴圈（與 build123d adapter 對齊，理由見該處）。"""
+        endpoints = [p for seg in segments for p in seg]
+        used = [False] * len(endpoints)
+        for i, p in enumerate(endpoints):
+            if used[i]:
+                continue
+            match = None
+            for j in range(i + 1, len(endpoints)):
+                if used[j]:
+                    continue
+                q = endpoints[j]
+                if abs(p[0] - q[0]) < tol and abs(p[1] - q[1]) < tol:
+                    match = j
+                    break
+            if match is None:
+                return False
+            used[i] = True
+            used[match] = True
+        return True
+
     def _has_closed_profile(self, sketch_feature: Feature) -> bool:
-        """檢查草圖是否包含至少一個閉合輪廓。"""
+        """檢查草圖是否包含至少一個閉合輪廓（含 line/arc 端點兩兩相接的情況，
+        見 build123d adapter 對應方法的說明）。"""
+        line_arc_segments: list[tuple[tuple[float, float], tuple[float, float]]] = []
         for entity in sketch_feature.sketch_entities:
             etype = entity.get("entity_type") or entity.get("type")
             params = entity.get("parameters", entity)
             if etype in ("rectangle", "circle", "polygon", "slot"):
                 return True
+            if etype in ("line", "arc"):
+                ep = self._line_arc_endpoints(entity)
+                if ep:
+                    line_arc_segments.append(ep)
+                continue
             if etype == "polyline" and params.get("closed", False):
                 return True
+        if line_arc_segments and self._segments_form_closed_loop(line_arc_segments):
+            return True
         return False
 
     def _build_pad(

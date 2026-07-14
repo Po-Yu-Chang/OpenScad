@@ -10,7 +10,7 @@
 > - 架構原理：`OpenCad_Local_AI_CAD_Architecture.md`；差距分析：`OpenCad_SolidWorks_Gap_Review_20260711.md`（下稱 Gap Review）
 > - 舊版章節對照：舊 §14 驗證方法論→**§9**；舊 §15 發包順序→**§3**；舊 §3–§5 已完成規格→Archive
 >
-> **進度速覽**：Phase 0 全✅、包 A–D✅、WP1-1/4/5✅、WP1-7 Gate✅（附打折註記）；WP1-0R 引擎接線✅但 FreeCAD 僅 9/22 特徵；⚠ WP1-2 紅線違規（rebuild 不求解）；✅ **WP-ENV0 於 2026-07-14 完成（僅剩 push）——三份基線全綠（§1.3），下一包＝WP1-2R（可並行 WP-S1）**。
+> **進度速覽**：Phase 0 全✅、包 A–D✅、WP1-1/4/5✅、WP1-7 Gate✅（附打折註記）；WP1-0R 引擎接線✅但 FreeCAD 僅 9/22 特徵；✅ **WP-ENV0 完成（2026-07-14）**；⚠ **WP1-2R 後端已完成（2026-07-14，§3.2）——鐵則 3 紅線解除、真求解器、雙引擎 smoke-test 11/11，但 UIA 互動驗收待補**；下一包＝**WP1-0R2**（可並行 WP-S1／WP1-2R 的 UIA 收尾）。
 >
 > **每個工作包都是獨立可發包單位**：發包時把該節全文＋§1 現況＋§2 地雷＋§9 驗證方法論一起給執行模型，不得省略。
 
@@ -118,8 +118,8 @@
 18. **repo 根的 `FreeCAD/` 是 2.3GB 本機安裝**（已 gitignore），不得加進 git。FreeCAD 綁定是 cp311，**必須用它自帶 `bin\python.exe`（3.11）執行**；系統 Python 3.12 import 必失敗。
 19. **FreeCADShapeWrapper 屬性相容性**：`server.py` 呼叫 build123d 介面（`part.volume` 等）；FreeCAD 用 `.Volume/.Area/.BoundBox`——wrapper 必須轉接。另 wrapper 的 `volume` 遇例外回 0.0 會**掩蓋錯誤**（WP1-0R2 要改）。
 20. **presigned_token 欄位名**：presign endpoint 回傳 `{"presigned_token": ...}` 非 `{"token": ...}`。
-21. **constraints 在 rebuild pipeline 是死資料**（WP1-2R 完成前）：adapter `_build_sketch` 只讀 `sketch_entities` 座標。任何繞過 solve 直接改 entities 的路徑都會產生違反約束的幾何且無人發現。
-22. **假綠四態——看到「全綠」先驗證跑了什麼**：(a) angle/symmetric/tangent 測試只驗型別存在；(b) FreeCAD 測試在系統 Python 3.12 下全 skip（只有 cp311 實跑）；(c) ~~vertical-slice-a.ps1 no-op 綠燈~~（07-12 已修）；(d) `tests/prompts/test_llm_convergence.py:71` 恆真斷言＋模擬 plan 自我斷言（非真 gateway），且 `tests/prompts` 不在 pytest.ini testpaths **預設根本不跑**。驗收報告必須註明引擎、Python 版本、實際收集的測試數。
+21. ~~constraints 在 rebuild pipeline 是死資料~~ ✅ 2026-07-14 WP1-2R 已解：build123d rebuild 前用 `check_residuals()` 驗殘差、不符即 raise；FreeCAD rebuild 時真的呼叫 `solve()` 重新求解、衝突即 raise。任何繞過 solve 直接改 entities 的路徑，rebuild 現在會 fail 或自動重求解，不會再產生違反約束卻無人發現的幾何。
+22. **假綠四態——看到「全綠」先驗證跑了什麼**：(a) ~~angle/symmetric/tangent 測試只驗型別存在~~（2026-07-14 已補真實數值測試，見 `test_sketch_solver.py`）；(b) FreeCAD 測試在系統 Python 3.12 下全 skip（只有 cp311 實跑）；(c) ~~vertical-slice-a.ps1 no-op 綠燈~~（07-12 已修）；(d) `tests/prompts/test_llm_convergence.py:71` 恆真斷言＋模擬 plan 自我斷言（非真 gateway），且 `tests/prompts` 不在 pytest.ini testpaths **預設根本不跑**。驗收報告必須註明引擎、Python 版本、實際收集的測試數。**新增 (e)**：`vertical-slice-a.ps1` step 7 的 DOF 斷言目前仍走抽象成本表路徑（sketch entity 沒有真實 id、約束引用的 e0/e1 不對應任何實體），不是走 WP1-2R 的 Jacobian 求解器——同一份「全綠」報告底下可能同時有真驗證與掛名驗證，逐條看清楚在測什麼。
 23. **UIA 驅動 Avalonia 選單只能走鍵盤路徑**：MenuItem 只暴露 ScrollItemPattern；穩定做法＝`SetFocus()`→`{ENTER}`→`{DOWN}{ENTER}`，並以子選單項出現確認；名稱比對必須限定 ControlType。
 24. **tests/prompts 有 `__init__.py`（是 package）**：靠 `tests/prompts/conftest.py` 把本目錄補進 sys.path（勿刪）。
 25. **（新，2026-07-13；07-14 補充）Windows 應用程式控制／Defender 對未簽章大型 DLL 有兩種干擾**：(a) 直接封鎖——`import OCP` 丟「應用程式控制原則已封鎖此檔案」→ build123d 全滅；(b) **首載完整掃描**——首次 import 可拖到 200s+（07-14 實測 229s），任何 30s 級啟動逾時都會誤判「Worker 起不來」。掃畢放行後恢復正常。**基線突然大片紅或 Worker 逾時，先查這個**，不要先怪程式碼；套件更新（DLL 換檔）後會再現。連帶注意：模組層型別註記（如 `-> Part`）在依賴缺席時會讓 pytest **收集中斷**而非 skip，測試檔一律加 `from __future__ import annotations`。
@@ -130,9 +130,9 @@
 
 | 序 | 包 | 前置 | 一句話範圍 |
 |---|---|---|---|
-| 0 | **WP-ENV0 環境與測試基礎修復**（§3.1） | 無（**最優先**） | 解除 DLL 封鎖、修收集中斷、修 replay 腳本、基線重跑 |
-| 1 | **WP1-2R 真求解器**（§3.2） | WP-ENV0 | 解除鐵則 3 紅線——MVP P0 |
-| 2 | **WP1-0R2 FreeCAD 特徵 parity**（§3.3） | WP1-2R（部分可並行） | 補 13 特徵＋修 chamfer/revolve/volume＋誠實矩陣 |
+| 0 | ~~WP-ENV0 環境與測試基礎修復~~（§3.1） | 無 | ✅ 完成（2026-07-14） |
+| 1 | **WP1-2R 真求解器**（§3.2） | WP-ENV0 | ⚠ 後端完成（2026-07-14）／UIA 互動驗收待補——解除鐵則 3 紅線 |
+| 2 | **WP1-0R2 FreeCAD 特徵 parity**（§3.3） | WP1-2R 後端（已滿足） | 補 13 特徵＋修 chamfer/revolve/volume＋誠實矩陣 |
 | 3 | **WP-S1 契約同步＋WP1-3 收尾**（§3.4）／可與 1、2 並行 | WP-ENV0 | C#↔Python↔schema 對稱、datum 去佔位、假綠清理、檔案家務 |
 | 4 | **WP-H1 殘項：真 gateway 端到端＋Gate 補強**（§3.5） | WP-ENV0 | tests/prompts 真實化、vertical-slice step 2/9 補強 |
 | 5 | Phase 2 各包（§4，發包前出終稿）→ Phase 3（§5）→ Phase 4（§6） | 0–4 全過 | — |
@@ -150,25 +150,45 @@
 
 **驗收**：✅ 三份實跑輸出全綠；`import build123d` 成功；replay 腳本可執行且 12/12。
 
-### 3.2 WP1-2R：真求解器（解除紅線；原 WP1-2 驗收條目在此完成）
+### 3.2 WP1-2R：真求解器 ⚠ 後端已完成（2026-07-14）／UIA 互動驗收待補
 
-**現況問題**（證據：Review 07-12 §1＋Addendum §2.1）：
+**現況問題（修復前）**（證據：Review 07-12 §1＋Addendum §2.1）：
 - 求解器是自寫投影 heuristic（`sketch_solver.py`），無聯立/迭代/殘差；docstring 宣稱與實作不符。
 - **rebuild 兩個 adapter 都不讀 `feature.constraints`＝死 metadata（鐵則 3 違規）**。
 - angle/symmetric/tangent 無幾何實作，測試只驗型別（假綠 22a）。
 - DOF＝固定成本表相減（對座標零敏感）；衝突集＝切最後 N 個。
-- **solve 與實體建立脫節**：`_build_sketch` 只用閉合圖元參數建面，line/arc 被當輔助線丟棄——約束求解的幾何根本不進實體。
+- **solve 與實體建立脫節**：`_build_sketch` 只用閉合圖元參數建面，line/arc 被當輔助線丟棄（甚至 arc 建出的邊從未 `add()`，是死碼）——約束求解的幾何根本不進實體。
 - 真 FreeCAD Sketcher 只在 `cad-worker-freecad/` spike；其 19 個 solver 測試不在任何自動化路徑。
 
-**工作項**：
-1. rebuild 時對含 constraints 的 sketch **重新求解**——FreeCAD Sketcher 為權威（cp311 路徑；build123d 引擎下最低限＝rebuild 前驗證約束殘差、不符即 fail，不得靜默用舊座標）。
-2. 補 angle/symmetric/tangent 幾何實作；真 DOF（Jacobian rank 或 Sketcher 診斷）與真衝突集。
-3. 把 spike 的 19 個 solver 測試接進可執行路徑（cp311 跑法，比照 `run_freecad_tests.bat`）。
-4. 檢討 line/arc 圖元與實體建立的關係（開放輪廓的角色明確化，不得讓 solver 結果與模型脫節）。
-5. freecad `_build_sketch` 補 `arc` 分支（與 build123d 對齊）。
-6. 完成後解除地雷 #21、更新 #22(a)。
+**已完成（2026-07-14）**：
+1. ✅ `sketch_solver.py` 全面重寫：Levenberg-Marquardt 阻尼最小平方聯立求解 14 種約束的殘差函式（含新增 angle/symmetric/tangent 的真實幾何殘差，非 no-op）；DOF＝Jacobian 秩（`numpy.linalg.matrix_rank`），非固定成本表；衝突偵測改「依序加入約束、加入後殘差不收斂即判衝突並剔除」，非「切最後 N 個」。無座標模型的抽象實體（rectangle/polygon 等單獨計 DOF 用）仍走舊成本表記帳，行為不變（見模組 docstring）。
+2. ✅ 兩個 adapter 的 rebuild 都接上約束：
+   - **build123d**（沒有求解器）：rebuild 前用 `check_residuals()` 驗證目前座標是否已滿足約束，不符即 `raise ValueError`（不得靜默沿用舊座標）。
+   - **FreeCAD**：rebuild 時呼叫 `solve()` 真的重新求解、把座標移到收斂位置再建圖元；`state=="over"`（衝突）即 `raise ValueError` 中止。
+   - ⚠ **範圍決定（偏離原文字）**：兩引擎共用同一套 numpy 求解器，**沒有**改走原生 FreeCAD Sketcher API（`Sketcher.Constraint`/`sketch.solve()`/`sketch.DoF`）。理由：單一求解器實作維持一致行為、避免兩套數學各自維護；numpy 在 cp311／cp312 都可用（WP-ENV0 已驗證）。代價：沒有借到 FreeCAD Sketcher 內建的收斂穩定性與診斷（`ConflictingConstraints`/`RedundantConstraints`）。若之後有需要原生 Sketcher 診斷的理由，屬於可討論的後續選項，非本次遺漏。
+3. ✅ `build123d_adapter.py`：line 圖元不再是完全的死碼（原碼算完 x1/y1/x2/y2 後什麼都不做）；arc 圖元原本呼叫 `make_three_point_arc(p1, center, p2)`——第二參數應為弧上一點、傳圓心是既有 bug，且建出的邊從未 `add()`；兩者都已修：line/arc（含開放 polyline）現在會被收集，若整批端點兩兩相接（形成封閉迴圈）就嘗試建面。連帶擴充 `_has_closed_profile`（兩個 adapter 都改）：不再只認 rectangle/circle/polygon/slot/閉合 polyline，line/arc 端點兩兩配對也算閉合。
+4. ✅ FreeCAD `_sketch_entity_to_edges` 補上 `arc` 分支（原本完全沒有，與 build123d 沒對齊）。
+5. ✅ Phase 0 spike 的 19 個原生 FreeCAD Sketcher 測試（`cad-worker-freecad/tests/test_sketch_solver.py`）接進 `run_freecad_tests.bat`（cp311，19/19 pass，約 5-6 分鐘，含 100/500-entity 規模測試）。
+6. ✅ 地雷 #21 解除（見 §2）；#22(a) 更新為「已補真實作＋真測試」。
 
-**驗收**（沿原 WP1-2）：UIA 畫矩形→約束→DOF=0「完全定義」；拖曳欠約束跟隨、fully constrained 不動；矛盾約束→衝突清單→刪除恢復；改尺寸 60→80 幾何跟隨→pad bbox 更新；**新增**：直接改 sketch_entities 繞過 solve→rebuild 必須 fail 或重求解（殘差測試）；pytest 13 種約束各一案例＋DOF 斷言；smoke-test PASS。
+**回歸驗證（2026-07-14 實跑）**：
+- `tests/cad-worker/test_sketch_solver.py`：38/38（14 種約束各一真實數值案例、DOF 斷言、衝突偵測、殘差測試）。
+- `tests/cad-worker/test_wp1_2r_rebuild_constraints.py`（新增）：build123d 3/3＋FreeCAD 3/3（cp311）——直接驗證「不滿足約束 rebuild raise」「衝突 rebuild raise」「衝突解除後幾何真的移動到收斂座標」「line/arc 不再死碼」。
+- 全套 Python 基線：926 passed/41 skipped（system Python 3.12，含新測試）；FreeCAD adapter 36/36＋新測試 6/6＝42/42（cp311）；spike 19/19（cp311）。
+- `vertical-slice-a.ps1` 雙引擎重跑：build123d 11/11、freecad 11/11，皆 Phase 1 Gate PASSED。
+
+**已知殘缺（誠實記錄，未列入本次「完成」）**：
+- **UIA 互動驗收未做**：本次修復在後端／HTTP／pytest 層級完整驗證，但「畫矩形→約束→DOF=0」「拖曳欠約束跟隨」「點擊衝突項刪除恢復」這幾條原驗收條目要透過 Avalonia 桌面 App＋UIA 才能驗，這次沒有跑桌面 App，屬於欠款，建議收尾前補一次 UIA smoke（可比照 WP1-7-UI 的 smoke-test 手法）。
+- `vertical-slice-a.ps1` step 7 的 DOF 斷言（`dof=0/state=full`）**仍走舊成本表記帳路徑**，不是新 Jacobian 路徑——因為該腳本的 sketch entity（`type=rectangle`）沒有 `id` 欄位、且約束引用的 `e0`/`e1` 本來就不對應任何真實實體 id（07-13 Addendum 已指出這是腳本本身的測試資料缺口，不在 WP1-2R 範圍內）；要讓 step 7 真正走新求解器，需要腳本改用有真實 id 的 line 實體或幫 rectangle 建立子邊 id 對應，建議併入 WP-H1 的 Gate 補強一起做。
+
+**驗收**（沿原 WP1-2；打勾者已完成）：
+- ✅ 矛盾約束→衝突清單→刪除恢復（pytest 層級：`test_conflicting_distance_constraints_marked_over`／`test_conflicting_constraints_rebuild_raises`）
+- ✅ 改尺寸 60→80 幾何跟隨→pad bbox 更新（`test_constraints_move_geometry_to_solved_coordinates`）
+- ✅ 直接改 sketch_entities 繞過 solve→rebuild 必須 fail 或重求解（殘差測試）
+- ✅ pytest 13/14 種約束各一案例＋DOF 斷言
+- ✅ smoke-test PASS（雙引擎 11/11）
+- ⬜ UIA 畫矩形→約束→DOF=0「完全定義」（未做，見上）
+- ⬜ 拖曳欠約束跟隨、fully constrained 不動（未做，見上）
 
 ### 3.3 WP1-0R2：FreeCAD 特徵 parity
 

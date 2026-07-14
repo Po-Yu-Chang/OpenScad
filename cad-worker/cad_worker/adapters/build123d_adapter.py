@@ -35,6 +35,7 @@ except ImportError as _e:
 
 from ..feature_graph import FeatureGraph, Feature, FeatureState, FeatureType, ParameterValue
 from ..standard_parts import get_clearance_hole_diameter, get_counterbore_dimensions, get_nema_mounting
+from ..sketch_solver import Constraint as _SketchConstraint, check_residuals as _check_sketch_residuals
 
 
 class BuildResult(NamedTuple):
@@ -293,7 +294,24 @@ class Build123dAdapter:
 
         依 plane 欄位選擇基準面（XY/XZ/YZ）與偏移量。
         若草圖沒有閉合輪廓（僅線段/弧），回傳 None 而非崩潰。
+
+        WP1-2R 紅線修復：build123d 沒有內建草圖求解器，幾何仍由參數直接計算；
+        但若 feature.constraints 非空，rebuild 前必須驗證目前座標是否仍滿足
+        約束殘差——不符即中止（raise），不得靜默沿用可能已過期的座標。
         """
+        if feature.constraints:
+            check = _check_sketch_residuals(
+                feature.sketch_entities,
+                [_SketchConstraint.from_dict(c) for c in feature.constraints],
+            )
+            if not check["satisfied"]:
+                raise ValueError(
+                    f"草圖 {feature.feature_id} 目前座標不滿足約束"
+                    f"（違反: {check['violations']}，最大殘差={check['max_residual']:.4f}mm）——"
+                    f"build123d 引擎沒有求解器，rebuild 中止而非靜默套用過期座標。"
+                    f"請先呼叫 /sketch/{{feature_id}}/solve 取得收斂座標後再提交。"
+                )
+
         plane_base = feature.plane.get("base", "XY")
         plane_offset = self._raw_mm(feature.plane.get("offset", 0))
 
@@ -326,11 +344,22 @@ class Build123dAdapter:
             return None
 
         with BuildSketch(work_plane) as sketch:
+            # WP1-2R：line/arc/開放 polyline 不再是純輔助的死碼——收集它們產生
+            # 的邊，若整批邊恰好首尾相連形成閉合輪廓，嘗試建面（與 solver 求解
+            # 出的座標一致，不讓 solver 結果與實體建立脫節）。
+            loose_edges: list[Edge] = []
             for entity in feature.sketch_entities:
-                self._add_sketch_entity(entity, feature)
+                loose_edges.extend(self._add_sketch_entity(entity, feature) or [])
+            if loose_edges:
+                try:
+                    wire = Wire(loose_edges)
+                    face = make_face(wire)
+                    add(face)
+                except Exception:
+                    pass  # 未閉合的開放輪廓——不產生面，僅供求解器使用
         return sketch.sketch
 
-    def _add_sketch_entity(self, entity: dict[str, Any], feature: Feature) -> None:
+    def _add_sketch_entity(self, entity: dict[str, Any], feature: Feature) -> list["Edge"]:
         # 支援兩種格式：
         # 1. viewer 格式: {"type": "rectangle", "x": 0, "y": 0, "width": 40, "height": 20}
         # 2. 舊 adapter 格式: {"entity_type": "rectangle", "parameters": {...}}
@@ -344,6 +373,7 @@ class Build123dAdapter:
             cy = self._raw_mm(params.get("center_y", params.get("y", 0)))
             with Locations(Pos(cx, cy)):
                 Rectangle(w, h)
+            return []
 
         elif etype == "circle":
             r = self._raw_mm(params.get("radius", params.get("r", 5)))
@@ -351,12 +381,14 @@ class Build123dAdapter:
             cy = self._raw_mm(params.get("center_y", params.get("y", 0)))
             with Locations(Pos(cx, cy)):
                 Circle(r)
+            return []
 
         elif etype == "polygon":
             n = int(params.get("sides", 6))
             r = self._raw_mm(params.get("circumscribed_radius", params.get("radius", 5)))
             with Locations(Pos(0, 0)):
                 RegularPolygon(r, n)
+            return []
 
         elif etype == "slot":
             w = self._raw_mm(params.get("width", 20))
@@ -365,24 +397,30 @@ class Build123dAdapter:
             cy = self._raw_mm(params.get("center_y", 0))
             with Locations(Pos(cx, cy)):
                 SlotOverall(w, h)
+            return []
 
         elif etype == "line":
-            # 線段——由兩端點定義。在 BuildSketch 中只作為輔助邊界。
+            # WP1-2R：線段不再是死碼——回傳邊，交給上層嘗試與其他線段/弧
+            # 共同閉合成面（若整組線段/弧本身不閉合，仍只當輔助幾何用）。
             x1 = self._raw_mm(params.get("x1", 0))
             y1 = self._raw_mm(params.get("y1", 0))
             x2 = self._raw_mm(params.get("x2", 10))
             y2 = self._raw_mm(params.get("y2", 0))
-            # 線段在 sketch 中只作為輔助，不直接產生面
+            try:
+                return [Edge.make_line(Vector(x1, y1, 0), Vector(x2, y2, 0))]
+            except Exception:
+                return []
 
         elif etype == "polyline":
             # 多段線——由頂點列表定義，可閉合或開放
             points = params.get("points", [])
             closed = params.get("closed", False)
             if len(points) < 2:
-                return
+                return []
             pts = [(self._raw_mm(p[0]), self._raw_mm(p[1])) for p in points]
             if closed:
-                # 閉合多段線在 BuildSketch 中用 Edge + Wire + make_face 建立面
+                # 閉合多段線自己形成的輪廓已確定閉合，直接在此建面／加入，
+                # 不需交給上層的跨實體閉合嘗試。
                 edges = []
                 for i in range(len(pts)):
                     p1 = Vector(pts[i][0], pts[i][1], 0)
@@ -394,7 +432,15 @@ class Build123dAdapter:
                     add(face)
                 except Exception:
                     pass  # 若建面失敗，不影響其他實體
-            # 開放多段線在 BuildSketch 中不產生面，跳過
+                return []
+            # 開放多段線——回傳邊，供上層嘗試與其他線段/弧共同閉合
+            edges = []
+            for i in range(len(pts) - 1):
+                try:
+                    edges.append(Edge.make_line(Vector(pts[i][0], pts[i][1], 0), Vector(pts[i + 1][0], pts[i + 1][1], 0)))
+                except Exception:
+                    pass
+            return edges
 
         elif etype == "arc":
             # 圓弧——由圓心、半徑、起角、終角定義
@@ -405,33 +451,96 @@ class Build123dAdapter:
             end_angle = float(params.get("end_angle", 90))
             start_rad = math.radians(start_angle)
             end_rad = math.radians(end_angle)
-            # 弧在 BuildSketch 中只作為輔助邊界
+            mid_rad = (start_rad + end_rad) / 2
             p1 = Vector(cx + math.cos(start_rad) * r, cy + math.sin(start_rad) * r, 0)
             p2 = Vector(cx + math.cos(end_rad) * r, cy + math.sin(end_rad) * r, 0)
-            center = Vector(cx, cy, 0)
+            # WP1-2R 修正：make_three_point_arc 的第二個參數須是弧「上」的點
+            # （非圓心）——舊碼誤傳圓心，且建出的邊從未 add()，完全是死碼。
+            p_mid = Vector(cx + math.cos(mid_rad) * r, cy + math.sin(mid_rad) * r, 0)
             try:
-                Edge.make_three_point_arc(p1, center, p2)
+                return [Edge.make_three_point_arc(p1, p_mid, p2)]
             except Exception:
-                pass  # 若建弧失敗，不影響其他實體
+                return []
 
         elif etype == "construction_line":
             # 建構線——只用於輔助，不參與實體建立
-            pass
+            return []
+
+        return []
 
     def _raw_mm(self, val: Any) -> float:
         if isinstance(val, dict):
             return ParameterValue.from_dict(val).to_mm()
         return float(val)
 
+    def _line_arc_endpoints(self, entity: dict[str, Any]) -> tuple[tuple[float, float], tuple[float, float]] | None:
+        """算出 line/arc 實體的兩端點座標，供閉合輪廓偵測用。"""
+        etype = entity.get("entity_type") or entity.get("type")
+        params = entity.get("parameters", entity)
+        if etype == "line":
+            x1 = self._raw_mm(params.get("x1", 0))
+            y1 = self._raw_mm(params.get("y1", 0))
+            x2 = self._raw_mm(params.get("x2", 10))
+            y2 = self._raw_mm(params.get("y2", 0))
+            return (x1, y1), (x2, y2)
+        if etype == "arc":
+            cx = self._raw_mm(params.get("center_x", params.get("x", 0)))
+            cy = self._raw_mm(params.get("center_y", params.get("y", 0)))
+            r = self._raw_mm(params.get("radius", params.get("r", 5)))
+            start_rad = math.radians(float(params.get("start_angle", 0)))
+            end_rad = math.radians(float(params.get("end_angle", 90)))
+            p1 = (cx + math.cos(start_rad) * r, cy + math.sin(start_rad) * r)
+            p2 = (cx + math.cos(end_rad) * r, cy + math.sin(end_rad) * r)
+            return p1, p2
+        return None
+
+    @staticmethod
+    def _segments_form_closed_loop(segments: list[tuple[tuple[float, float], tuple[float, float]]], tol: float = 1e-4) -> bool:
+        """檢查一組線段/弧端點是否兩兩配對（每個端點恰好被兩段共用），
+        代表這組線段/弧共同構成一或多個封閉迴圈（不要求單一迴圈，只要
+        沒有落單、度數為 1 的端點）。"""
+        endpoints = [p for seg in segments for p in seg]
+        used = [False] * len(endpoints)
+        for i, p in enumerate(endpoints):
+            if used[i]:
+                continue
+            match = None
+            for j in range(i + 1, len(endpoints)):
+                if used[j]:
+                    continue
+                q = endpoints[j]
+                if abs(p[0] - q[0]) < tol and abs(p[1] - q[1]) < tol:
+                    match = j
+                    break
+            if match is None:
+                return False
+            used[i] = True
+            used[match] = True
+        return True
+
     def _has_closed_profile(self, sketch_feature: Feature) -> bool:
-        """檢查草圖是否包含至少一個閉合輪廓。"""
+        """檢查草圖是否包含至少一個閉合輪廓。
+
+        rectangle/circle/polygon/slot/閉合 polyline 本身即閉合；此外，一組
+        line/arc 若端點兩兩相接（形成封閉迴圈），也視為閉合輪廓——
+        WP1-2R 前 line/arc 完全不參與面的建立，這裡讓「輪廓由多段線/弧組成」
+        的常見畫法（非僅 rectangle/circle 等內建圖元）也能通過 pad 驗證。
+        """
+        line_arc_segments: list[tuple[tuple[float, float], tuple[float, float]]] = []
         for entity in sketch_feature.sketch_entities:
             etype = entity.get("entity_type") or entity.get("type")
             params = entity.get("parameters", entity)
             if etype in ("rectangle", "circle", "polygon", "slot"):
                 return True
+            if etype in ("line", "arc"):
+                ep = self._line_arc_endpoints(entity)
+                if ep:
+                    line_arc_segments.append(ep)
+                continue
             if etype == "polyline" and params.get("closed", False):
                 return True
+        if line_arc_segments and self._segments_form_closed_loop(line_arc_segments):
+            return True
         return False
 
     def _validate_sketch_closed(self, sketch_feature: Feature) -> None:
