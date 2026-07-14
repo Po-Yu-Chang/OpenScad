@@ -220,7 +220,7 @@ public partial class MainWindow : Window
                             break;
                         case ViewerBridge.MessageType.FaceSelected:
                             if (msg.SourceFeatureId != null)
-                                vm.SelectFeatureById(msg.SourceFeatureId);
+                                _ = vm.HandleFaceSelectedAsync(msg.SourceFeatureId, msg.Centroid);
                             break;
                         case ViewerBridge.MessageType.MeasurementResult:
                             vm.AddMeasurement(

@@ -441,19 +441,23 @@ class FreeCADAdapter:
         """建立草圖，回傳 FreeCAD Wire（或 Face 如果閉合）。"""
         plane_base = feature.plane.get("base", "XY")
         plane_offset = self._raw_mm(feature.plane.get("offset", 0))
-        
-        # WP1-3: datum: 引用——從 graph.reference_geometry 取得 derived_geometry
+
+        # WP-S1 修復：datum 平面原本只確認「id 存在」就當作 XY 處理
+        # （"未來可以從 reference_geometry 取得更精確的變換矩陣" 這個 TODO
+        # 從未補上）。現在真的解析 derived_geometry 的 origin/normal，建出
+        # 一個正交座標系（見 _resolve_datum_plane_transform）；解析不到
+        # （datum 不存在、或 derived_geometry 尚未算出——見
+        # reference_geometry_builder.py 的「一輪落後」限制）就直接 raise，
+        # 不再靜默退回 XY 生出錯誤幾何。
+        datum_transform = None
         if isinstance(plane_base, str) and plane_base.startswith("datum:"):
             datum_id = plane_base[6:]
-            datum_found = False
-            for rg in graph.reference_geometry:
-                if rg.get("id") == datum_id and rg.get("kind") == "plane":
-                    # 對於 FreeCAD，我們將使用座標變換來處理 datum 平面
-                    # 這裡先記錄 datum 平面資訊，後續在 _sketch_entity_to_edges 中使用
-                    datum_found = True
-                    break
-            if not datum_found:
-                raise ValueError(f"找不到 datum 平面: {datum_id}")
+            datum_transform = self._resolve_datum_plane_transform(datum_id, graph)
+            if datum_transform is None:
+                raise ValueError(
+                    f"找不到 datum 平面: {datum_id}（或其 derived_geometry 尚未算出——"
+                    f"需要先有一輪成功的 rebuild 才能解析此 datum 依賴的來源面）"
+                )
 
         has_closed = self._has_closed_profile(feature)
         if not has_closed:
@@ -479,7 +483,7 @@ class FreeCADAdapter:
         # 收集草圖實體的幾何
         edges = []
         for entity in entities_to_build:
-            entity_edges = self._sketch_entity_to_edges(entity, plane_base, plane_offset)
+            entity_edges = self._sketch_entity_to_edges(entity, plane_base, plane_offset, datum_transform)
             edges.extend(entity_edges)
 
         if not edges:
@@ -498,25 +502,85 @@ class FreeCADAdapter:
             except Exception:
                 return None
 
-    def _sketch_entity_to_edges(self, entity: dict, plane_base: str, offset: float = 0) -> list:
-        """將草圖實體轉為 FreeCAD Edge 列表。"""
+    def _resolve_datum_plane_transform(self, datum_id: str, graph: FeatureGraph):
+        """從 `graph.reference_geometry` 解析 datum 平面的真實座標系。
+
+        回傳 (origin, x_axis, y_axis, normal)（皆為 FreeCAD.Vector），
+        或 None（datum 不存在／derived_geometry 尚未算出）。
+
+        只有 origin+normal 不足以決定草圖 2D 座標到 3D 的完整映射——法向量
+        繞自身旋轉的角度還有一個自由度。這裡用標準做法補上任意但確定的
+        in-plane 基底：先選一個不平行於 normal 的參考向量，兩次外積湊出
+        x_axis/y_axis。跟 build123d 的 `Plane(origin=..., z_dir=...)`
+        用的是同一種數學想法，但兩邊實作各自獨立，繞法向量的實際旋轉角
+        不保證逐位元相同——同一個 datum 在兩引擎下草圖可能相差一個
+        繞法向量的旋轉，形狀本身不受影響（誠實記錄，非本次要對齊到位元
+        級一致的範圍）。
+        """
+        for rg in graph.reference_geometry:
+            if rg.get("id") == datum_id and rg.get("kind") == "plane":
+                dg = rg.get("derived_geometry", {})
+                origin_list = dg.get("origin")
+                normal_list = dg.get("normal")
+                if not origin_list or not normal_list:
+                    return None
+                origin = FreeCAD.Vector(*origin_list)
+                normal = FreeCAD.Vector(*normal_list)
+                if normal.Length < 1e-9:
+                    return None
+                normal = normal.normalize()
+                reference = FreeCAD.Vector(0, 0, 1) if abs(normal.z) < 0.9 else FreeCAD.Vector(1, 0, 0)
+                x_axis = reference.cross(normal)
+                if x_axis.Length < 1e-9:
+                    return None
+                x_axis = x_axis.normalize()
+                y_axis = normal.cross(x_axis).normalize()
+                return origin, x_axis, y_axis, normal
+        return None
+
+    def _sketch_entity_to_edges(
+        self, entity: dict, plane_base: str, offset: float = 0,
+        datum_transform: tuple | None = None,
+    ) -> list:
+        """將草圖實體轉為 FreeCAD Edge 列表。
+
+        WP-S1 修復：datum 平面原本一律當 XY 處理（"暫時使用預設的 XY 平面"
+        的 TODO 從未補上）。現在若呼叫端（`_build_sketch`）已解析出真實的
+        `datum_transform`（origin/x_axis/y_axis/normal，來自 datum 的
+        derived_geometry），這裡就用它做真正的座標變換；否則仍走原本
+        XY/XZ/YZ 三個固定基準面的邏輯。
+        """
         etype = entity.get("entity_type") or entity.get("type")
         params = entity.get("parameters", entity)
         edges = []
 
-        # 座標轉換：草圖座標 → 3D 座標（依 plane_base）
-        def to_3d(x: float, y: float) -> FreeCAD.Vector:
-            # 處理 datum 平面
-            if isinstance(plane_base, str) and plane_base.startswith("datum:"):
-                # 對於 datum 平面，暫時使用預設的 XY 平面處理
-                # 未來可以從 reference_geometry 取得更精確的變換矩陣
-                return FreeCAD.Vector(x, y, offset)
-            elif plane_base == "XZ":
-                return FreeCAD.Vector(x, offset, y)
+        if datum_transform is not None:
+            origin, x_axis, y_axis, plane_normal = datum_transform
+
+            def to_3d(x: float, y: float) -> FreeCAD.Vector:
+                return origin.add(x_axis.multiply(x)).add(y_axis.multiply(y))
+
+            normal = plane_normal
+        else:
+            # 座標轉換：草圖座標 → 3D 座標（依 plane_base）
+            def to_3d(x: float, y: float) -> FreeCAD.Vector:
+                if isinstance(plane_base, str) and plane_base.startswith("datum:"):
+                    # 解析不到 datum_transform 時的最後防線——理論上不會走到
+                    # 這裡，因為 _build_sketch 在解析失敗時已經 raise。
+                    return FreeCAD.Vector(x, y, offset)
+                elif plane_base == "XZ":
+                    return FreeCAD.Vector(x, offset, y)
+                elif plane_base == "YZ":
+                    return FreeCAD.Vector(offset, x, y)
+                else:  # XY
+                    return FreeCAD.Vector(x, y, offset)
+
+            if plane_base == "XZ":
+                normal = FreeCAD.Vector(0, 1, 0)
             elif plane_base == "YZ":
-                return FreeCAD.Vector(offset, x, y)
-            else:  # XY
-                return FreeCAD.Vector(x, y, offset)
+                normal = FreeCAD.Vector(1, 0, 0)
+            else:
+                normal = FreeCAD.Vector(0, 0, 1)
 
         if etype == "rectangle":
             w = self._raw_mm(params.get("width", params.get("w", 10)))
@@ -541,13 +605,6 @@ class FreeCADAdapter:
             cx = self._raw_mm(params.get("center_x", params.get("x", 0)))
             cy = self._raw_mm(params.get("center_y", params.get("y", 0)))
             center = to_3d(cx, cy)
-            # 法向量依 plane_base
-            if plane_base == "XZ":
-                normal = FreeCAD.Vector(0, 1, 0)
-            elif plane_base == "YZ":
-                normal = FreeCAD.Vector(1, 0, 0)
-            else:
-                normal = FreeCAD.Vector(0, 0, 1)
             try:
                 edge = Part.makeCircle(r, center, normal)
                 edges = [edge]
@@ -590,12 +647,6 @@ class FreeCADAdapter:
                 Part.makeLine(p4, p1),
             ]
             # 兩端半圓
-            if plane_base == "XZ":
-                normal = FreeCAD.Vector(0, 1, 0)
-            elif plane_base == "YZ":
-                normal = FreeCAD.Vector(1, 0, 0)
-            else:
-                normal = FreeCAD.Vector(0, 0, 1)
             try:
                 # 右端半圓
                 c_right = to_3d(x1 - r, cy)
@@ -634,12 +685,6 @@ class FreeCADAdapter:
             start_angle = float(params.get("start_angle", 0))
             end_angle = float(params.get("end_angle", 90))
             center = to_3d(cx, cy)
-            if plane_base == "XZ":
-                normal = FreeCAD.Vector(0, 1, 0)
-            elif plane_base == "YZ":
-                normal = FreeCAD.Vector(1, 0, 0)
-            else:
-                normal = FreeCAD.Vector(0, 0, 1)
             try:
                 edges = [Part.makeCircle(r, center, normal, start_angle, end_angle)]
             except Exception:

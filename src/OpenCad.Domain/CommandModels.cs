@@ -47,6 +47,11 @@ public class CadCommand
     [JsonPropertyName("constraints")]
     public List<Dictionary<string, object>>? Constraints { get; set; }
 
+    // WP-S1: create_reference_geometry 命令的 payload（與 Python
+    // command_validator.py 的 reference_geometry 欄位對稱：id/name/kind/definition）。
+    [JsonPropertyName("reference_geometry")]
+    public Dictionary<string, object>? ReferenceGeometry { get; set; }
+
     [JsonPropertyName("reasoning")]
     public string Reasoning { get; set; } = string.Empty;
 }

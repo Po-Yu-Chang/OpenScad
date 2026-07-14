@@ -123,6 +123,9 @@
                                     <MenuItem Header="⊘ 抑制" Command="{Binding SuppressFeatureCommand}" />
                                     <MenuItem Header="⊙ 取消抑制" Command="{Binding UnsuppressFeatureCommand}" />
                                     <Separator />
+                                    <MenuItem Header="⬆ 上移" Command="{Binding MoveFeatureUpCommand}" />
+                                    <MenuItem Header="⬇ 下移" Command="{Binding MoveFeatureDownCommand}" />
+                                    <Separator />
                                             <MenuItem Header="🔍 隔離" Command="{Binding IsolateFeatureCommand}" />
                                             <MenuItem Header="🙈 隱藏" Command="{Binding HideFeatureCommand}" />
                                             <MenuItem Header="👁 顯示全部" Command="{Binding ShowAllFeaturesCommand}" />

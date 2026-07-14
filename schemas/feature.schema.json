@@ -13,6 +13,49 @@
     "features": {
       "type": "array",
       "items": { "$ref": "#/definitions/feature" }
+    },
+    "bodies": {
+      "type": "array",
+      "description": "多實體支援（v2）——每個 body 一個 id/name/material/appearance",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "material": { "type": "string" },
+          "appearance": {}
+        },
+        "required": ["id"]
+      }
+    },
+    "reference_geometry": {
+      "type": "array",
+      "description": "WP1-3 基準幾何陣列（datum plane/axis/point）——WP-S1 修復：原本只在\ndefinitions 定義單一項目的形狀，從未被頂層 $ref 引用，與實際存檔格式\n（cad_worker/feature_graph.py 的 to_dict()）對不上，已接上。",
+      "items": { "$ref": "#/definitions/reference_geometry" }
+    },
+    "rollback_position": {
+      "type": ["integer", "null"],
+      "description": "回溯位置（v2）——null 表示未回溯，顯示到最新特徵"
+    },
+    "global_variables": {
+      "type": "array",
+      "description": "全域變數（Phase 2 WP2-1 預留欄位，目前存但不求值）",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "expression": { "type": "string" },
+          "unit": { "type": "string" }
+        }
+      }
+    },
+    "configurations": {
+      "type": "array",
+      "description": "設計組態（Phase 2 預留欄位）"
+    },
+    "custom_properties": {
+      "type": "object",
+      "description": "自訂屬性（material/描述等中繼資料）"
     }
   },
   "definitions": {
@@ -167,8 +210,11 @@
           "properties": {
             "base": {
               "type": "string",
-              "enum": ["XY", "XZ", "YZ"],
-              "description": "XY=上(Top)、XZ=前(Front)、YZ=右(Right)"
+              "oneOf": [
+                { "enum": ["XY", "XZ", "YZ"] },
+                { "pattern": "^datum:.+" }
+              ],
+              "description": "XY=上(Top)、XZ=前(Front)、YZ=右(Right)，或 datum:<id> 引用基準面（WP-S1：與 Python/C# validator 對齊）"
             },
             "offset": {
               "$ref": "#/definitions/parameter_value",

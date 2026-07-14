@@ -114,6 +114,23 @@ engine_version: {capability.EngineVersion}
 如果需求中有缺少或矛盾的條件，請在 missing_info 中列出。
 回傳 JSON 格式的設計計畫。";
 
+        // WP-S1：datum_plane/datum_axis/datum_point 這 3 個字串「不在」
+        // EngineSupportedFeatureTypes（那份才是 create_feature 的權威型別清單）。
+        // 07-12 盤點把這個差異記成「planSchema 混入 datum 三型的污染點」，
+        // 07-13 對接文件據此列了「移除」的待辦——但複查發現這 3 個值是
+        // MainViewModel.cs 的 ExecutePlanAsync 故意用到的路由鍵：
+        // `if (step.FeatureType.StartsWith("datum_")) { 呼叫
+        // CreateReferenceGeometryAsync（走 reference_geometry API），continue；}`
+        // 也就是說 DesignStep.FeatureType 是刻意設計成「create_feature 型別
+        // 或 datum_* 路由鍵」的雙重用途欄位，prompt（見上方）也明確教 LLM
+        // 輸出這三個值。若真的從這裡的 enum 移除，結構化輸出的 schema 會
+        // 擋掉 LLM 依提示詞產生的合法 datum 步驟，直接打斷「LLM 一句話建
+        // 基準面」這條現正運作的路徑——這是會製造回歸的改法，故本次保留
+        // 不動，只留這段說明；真要把 datum 改成正式走
+        // action=""create_reference_geometry""（CommandValidator 已支援，
+        // 見 WP-S1 §3.4 item 1/4），需要同時改 DesignStep 資料結構、這裡
+        // 的 prompt 與 MainViewModel 的路由邏輯，是獨立的設計工作，不在本次
+        // 範圍內。
         var planSchema = @"
 {
   ""type"": ""object"",
@@ -126,7 +143,7 @@ engine_version: {capability.EngineVersion}
         ""sketch_entities"": { ""type"": ""array"", ""items"": { ""type"": ""object"" } },
         ""constraints"": { ""type"": ""array"", ""items"": { ""type"": ""object"" }, ""description"": ""草圖約束（WP1-2）。每個約束含 id, type, targets, value_mm/value_deg, name"" },
         ""standard_parts"": { ""type"": ""object"" },
-        ""plane"": { ""type"": ""object"", ""properties"": { ""base"": { ""type"": ""string"", ""enum"": [""XY"",""XZ"",""YZ""] }, ""offset"": { ""type"": ""number"" } }, ""required"": [""base""] }
+        ""plane"": { ""type"": ""object"", ""properties"": { ""base"": { ""type"": ""string"", ""pattern"": ""^(XY|XZ|YZ|datum:.+)$"" }, ""offset"": { ""type"": ""number"" } }, ""required"": [""base""] }
       }, ""required"": [""description"",""feature_type"",""parameters""] } },
     ""summary"": { ""type"": ""string"" },
     ""warnings"": { ""type"": ""array"", ""items"": { ""type"": ""string"" } },

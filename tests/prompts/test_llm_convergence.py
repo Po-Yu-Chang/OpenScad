@@ -8,6 +8,15 @@
 5-8. 各修復白名單類型正確處理
 9. TPM 內 token 量測
 10. 非 白名單錯誤出卡片
+
+WP-S1 誠實標註：本檔絕大多數案例（1/1b/2/4）都是拿手動寫死的
+`simulated_plan` dict 自我斷言（斷言的兩邊都來自同一段寫死資料，
+沒有呼叫任何真實 LLM gateway，也沒有經過 `_worker`/`server.py` 的
+apply_plan 流程）——**非端到端測試**，只能證明「這段程式碼認得出
+它自己剛寫的 dict 長什麼樣子」，證明不了真實 LLM 會不會這樣輸出。
+只有 §3（不支援拒絕）走 `opencad_llm_validator.validate_against_catalog()`
+是真的呼叫程式碼、有實質驗證力。真 gateway 端到端驗證歸 Master Plan
+§3.5（WP-H1 殘項），不在本檔範圍內。
 """
 import json
 import pytest
@@ -55,20 +64,18 @@ class TestMissingDimensions:
         }
         assert len(simulated_plan["missing_info"]) > 0, "缺尺寸時 missing_info 不得為空"
 
+    @pytest.mark.skip(
+        reason="WP-S1：原本的斷言是恆真的（`assert has_arbitrary and has_no_questions`"
+        "檢查的兩個布林值直接讀自它自己剛寫死的 dict，不管系統做什麼都會過，"
+        "沒有測到任何真實行為）。這裡想測的規則——「LLM 不得用任意預設值"
+        "取代提問」——目前只在 system prompt 裡用文字要求 LLM 遵守，"
+        "沒有對應的程式硬檢查函式可測（對照 opencad_llm_validator.py 的"
+        "validate_against_catalog，那個是真的有函式可以測的规则）。"
+        "在真的補一個「疑似隨意帶入預設值」偵測器之前，誠實地 skip，"
+        "不要用恆真斷言假裝這條規則已經被驗證。",
+    )
     def test_missing_dimensions_no_arbitrary_values(self):
         """案例1b：不得使用任意預設值（如 10x10x10）取代提問。"""
-        # Correct behavior: when dimensions are missing, missing_info must be non-empty
-        # This simulates a BAD LLM response that fills arbitrary values without asking
-        simulated_plan = {
-            "steps": [{"description": "盒子", "feature_type": "sketch",
-                        "parameters": {"width": 999, "height": 999}}],
-            "missing_info": [],  # BAD: empty missing_info with arbitrary values
-        }
-        # The test validates that this is WRONG behavior (for documentation)
-        # A correct LLM would have missing_info populated
-        has_arbitrary = simulated_plan["steps"][0]["parameters"].get("width") == 999
-        has_no_questions = len(simulated_plan["missing_info"]) == 0
-        assert has_arbitrary and has_no_questions, "This test documents bad behavior"
 
 
 # ─── 2. 歧義要求點選 ───
@@ -200,6 +207,21 @@ class TestCapabilityPayload:
         assert "validate_transaction" in tools
         assert "rebuild_staging" in tools
         assert "request_user_confirmation" in tools
+
+    def test_capability_flags_partial_features(self):
+        """WP-S1（Master Plan §3.4 item 14）：draft/variable_fillet/shell/thin/
+        countersink 兩引擎都只有簡化實作（見 FREECAD_ADAPTER_LIMITATIONS.md），
+        catalog 必須標 status=partial＋limitation 說明，不能讓 LLM 誤以為
+        這些型別功能完整——禁止靜默使用。"""
+        resp = client.get("/api/capability", headers=headers)
+        data = resp.json()
+        by_type = {entry["type"]: entry for entry in data["feature_catalog"]}
+        for ftype in ("draft", "variable_fillet", "shell", "thin", "countersink"):
+            assert by_type[ftype]["status"] == "partial", f"{ftype} 應標 partial"
+            assert by_type[ftype].get("limitation"), f"{ftype} 應附限制說明"
+        # 功能完整的型別不該被誤標
+        assert by_type["pad"]["status"] == "full"
+        assert "limitation" not in by_type["pad"]
 
 
 # ─── 10. Dry-run rebuild ───

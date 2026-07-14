@@ -248,6 +248,8 @@ public class MainViewModel : INotifyPropertyChanged
     public ICommand UnsuppressFeatureCommand { get; }
     public ICommand RollbackToHereCommand { get; }
     public ICommand RollbackToEndCommand { get; }
+    public ICommand MoveFeatureUpCommand { get; }
+    public ICommand MoveFeatureDownCommand { get; }
     public ICommand ExportChatCommand { get; }
     public ICommand CreateDatumPlaneCommand { get; }
 
@@ -312,6 +314,9 @@ public class MainViewModel : INotifyPropertyChanged
         UnsuppressFeatureCommand = ACmd(UnsuppressFeatureAsync, () => _selectedFeature != null && !_selectedFeature.IsDatumPlane && IsWorkerConnected);
         RollbackToHereCommand = ACmd(RollbackToHereAsync, () => _selectedFeature != null && !_selectedFeature.IsDatumPlane && IsWorkerConnected);
         RollbackToEndCommand = ACmd(RollbackToEndAsync, () => IsWorkerConnected);
+        // WP-S1：reorder_feature 右鍵上移/下移接線（拖曳可後補，見 Master Plan §3.4 item 7）
+        MoveFeatureUpCommand = ACmd(() => MoveFeatureAsync(-1), () => _selectedFeature != null && !_selectedFeature.IsDatumPlane && IsWorkerConnected);
+        MoveFeatureDownCommand = ACmd(() => MoveFeatureAsync(1), () => _selectedFeature != null && !_selectedFeature.IsDatumPlane && IsWorkerConnected);
         ExportChatCommand = ACmd(ExportChatAsync, () => Messages.Count > 0);
         CreateDatumPlaneCommand = ACmd(CreateDatumPlaneDialogAsync, () => IsWorkerConnected);
 
@@ -2298,12 +2303,21 @@ public class MainViewModel : INotifyPropertyChanged
     }
 
     /// <summary>
-    /// WP1-3: 基準面建立對話框——提示使用者輸入偏移量。
+    /// WP-S1 修復：原本硬編 "face:f1.top" + 10mm（"f1" 幾乎不會是真實專案的
+    /// 特徵 id，等於每次都建錯）。現在改為「按下後進入待選狀態，使用者在
+    /// 3D 視窗點一個面」，由 `HandleFaceSelectedAsync` 接手用真正點選的面
+    /// 建立 datum（預設偏移 0，即與所選面重合）。
+    ///
+    /// 殘留項（誠實記錄，非本次完成）：偏移量目前固定 0，還沒有讓使用者
+    /// 輸入非零偏移的數值輸入 UI；也還沒有把 datum 平面接進屬性面板讓
+    /// 使用者事後調整偏移——這兩塊需要新的 Avalonia 對話框/面板元件，
+    /// 是比「選面」更大的一塊 UI 工作，留待後續。
     /// </summary>
-    private async Task CreateDatumPlaneDialogAsync()
+    private Task CreateDatumPlaneDialogAsync()
     {
-        // 簡化：使用預設值（XY 面，偏移 10mm）——未來接 Avalonia 對話框
-        await CreateDatumPlaneAsync("face:f1.top", 10.0, "偏移基準面");
+        _awaitingDatumFacePick = true;
+        Messages.Add(ChatMessage.Assistant("請在 3D 視窗中點選要建立基準面的面…"));
+        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -2447,6 +2461,44 @@ public class MainViewModel : INotifyPropertyChanged
         catch (Exception ex)
         {
             Messages.Add(ChatMessage.Error($"取消抑制失敗：{ex.Message}"));
+        }
+        finally { IsBusy = false; }
+    }
+
+    /// <summary>
+    /// 上移/下移選取特徵——v2 reorder_feature 命令，new_order = 目前 order ± 1。
+    /// 違反依賴順序時 Worker 回 REORDER_DEPENDENCY_VIOLATION，顯示錯誤訊息即可
+    /// （不需要在 UI 端預先判斷是否為首/末項，Worker 的依賴檢查是唯一真相）。
+    /// </summary>
+    private async Task MoveFeatureAsync(int delta)
+    {
+        if (_selectedFeature == null || _selectedFeature.IsDatumPlane || _worker == null || _projectId == null) return;
+
+        var featureId = _selectedFeature.FeatureId;
+        var newOrder = _selectedFeature.Order + delta;
+        if (newOrder < 0) return;
+
+        IsBusy = true;
+        try
+        {
+            var command = new CadCommand
+            {
+                Action = "reorder_feature",
+                TargetFeatureId = featureId,
+                Parameters = new Dictionary<string, object> { ["new_order"] = newOrder },
+            };
+            var result = await _worker.ApplyCommandAsync(_projectId, command);
+            if (result.Status == "error")
+            {
+                Messages.Add(ChatMessage.Error($"移動特徵失敗：{result.ErrorCode} — {result.EngineMessage}"));
+                return;
+            }
+            await UpdateFeatureTreeAsync();
+            await RebuildAsync();
+        }
+        catch (Exception ex)
+        {
+            Messages.Add(ChatMessage.Error($"移動特徵失敗：{ex.Message}"));
         }
         finally { IsBusy = false; }
     }
@@ -2765,6 +2817,8 @@ public class MainViewModel : INotifyPropertyChanged
             ((AsyncRelayCommand)UnsuppressFeatureCommand).RaiseCanExecuteChanged();
             ((AsyncRelayCommand)RollbackToHereCommand).RaiseCanExecuteChanged();
             ((AsyncRelayCommand)RollbackToEndCommand).RaiseCanExecuteChanged();
+            ((AsyncRelayCommand)MoveFeatureUpCommand).RaiseCanExecuteChanged();
+            ((AsyncRelayCommand)MoveFeatureDownCommand).RaiseCanExecuteChanged();
 
             if (_selectedFeature != null && _selectedFeature.IsDatumPlane)
             {
@@ -2798,6 +2852,8 @@ public class MainViewModel : INotifyPropertyChanged
         ((AsyncRelayCommand)UnsuppressFeatureCommand).RaiseCanExecuteChanged();
         ((AsyncRelayCommand)RollbackToHereCommand).RaiseCanExecuteChanged();
         ((AsyncRelayCommand)RollbackToEndCommand).RaiseCanExecuteChanged();
+        ((AsyncRelayCommand)MoveFeatureUpCommand).RaiseCanExecuteChanged();
+        ((AsyncRelayCommand)MoveFeatureDownCommand).RaiseCanExecuteChanged();
 
         // 高亮對應 mesh
         ViewerScriptRequested?.Invoke($"highlightByName('{featureId}');");
@@ -3003,6 +3059,34 @@ public class MainViewModel : INotifyPropertyChanged
         }
     }
 
+    // WP-S1：真選面建立基準面——按下「新增基準面」後進入待選狀態，
+    // 使用者在 3D 視窗點一個面，這裡收到的 FaceSelected 就直接拿該面的
+    // source_feature_id + centroid 建立 datum（取代原本硬編 "face:f1.top"）。
+    private bool _awaitingDatumFacePick;
+
+    /// <summary>
+    /// 統一處理 viewer 傳來的 FaceSelected——若正在等待基準面選面，
+    /// 就建立 datum；否則走原本的特徵樹選取行為。
+    /// </summary>
+    public async Task HandleFaceSelectedAsync(string sourceFeatureId, double[]? centroid)
+    {
+        if (_awaitingDatumFacePick)
+        {
+            _awaitingDatumFacePick = false;
+            if (centroid == null || centroid.Length != 3)
+            {
+                Messages.Add(ChatMessage.Error("無法取得所選面的座標，基準面建立取消。"));
+                return;
+            }
+            var sourceRef = $"face_centroid:{sourceFeatureId}:{centroid[0]:F4},{centroid[1]:F4},{centroid[2]:F4}";
+            // 預設偏移 0（與所選面重合）——這是合法且常見的 datum 用法；
+            // 若要非零偏移，之後可再用「編輯參數」調整（見殘留項）。
+            await CreateDatumPlaneAsync(sourceRef, 0.0, "基準面");
+            return;
+        }
+        SelectFeatureById(sourceFeatureId);
+    }
+
     private void RefreshCanExecute()
     {
         ((AsyncRelayCommand)SendCommand).RaiseCanExecuteChanged();
@@ -3020,6 +3104,8 @@ public class MainViewModel : INotifyPropertyChanged
         ((AsyncRelayCommand)UnsuppressFeatureCommand).RaiseCanExecuteChanged();
         ((AsyncRelayCommand)RollbackToHereCommand).RaiseCanExecuteChanged();
         ((AsyncRelayCommand)RollbackToEndCommand).RaiseCanExecuteChanged();
+        ((AsyncRelayCommand)MoveFeatureUpCommand).RaiseCanExecuteChanged();
+        ((AsyncRelayCommand)MoveFeatureDownCommand).RaiseCanExecuteChanged();
         ((AsyncRelayCommand)ExportChatCommand).RaiseCanExecuteChanged();
         ((AsyncRelayCommand)CreateDatumPlaneCommand).RaiseCanExecuteChanged();
         ((AsyncRelayCommand)ApplyAllParametersCommand).RaiseCanExecuteChanged();

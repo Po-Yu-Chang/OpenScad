@@ -10,7 +10,7 @@
 > - 架構原理：`OpenCad_Local_AI_CAD_Architecture.md`；差距分析：`OpenCad_SolidWorks_Gap_Review_20260711.md`（下稱 Gap Review）
 > - 舊版章節對照：舊 §14 驗證方法論→**§9**；舊 §15 發包順序→**§3**；舊 §3–§5 已完成規格→Archive
 >
-> **進度速覽**：Phase 0 全✅、包 A–D✅、WP1-1/4/5✅、WP1-7 Gate✅（附打折註記）；✅ **WP-ENV0 完成（2026-07-14）**；⚠ **WP1-2R 後端已完成（2026-07-14，§3.2）——鐵則 3 紅線解除、真求解器、雙引擎 smoke-test 11/11，UIA 互動驗收待補**；⚠ **WP1-0R2 後端已完成（2026-07-14，§3.3）——FreeCAD adapter 達 22/22 parity、三範例雙引擎 rebuild 成功，桌面 UIA smoke-test 待補**；下一包＝**WP-S1**（契約同步＋WP1-3 收尾）／或補齊 WP1-2R／WP1-0R2 的 UIA 驗收。
+> **進度速覽**：Phase 0 全✅、包 A–D✅、WP1-1/4/5✅、WP1-7 Gate✅（附打折註記）；✅ **WP-ENV0 完成（2026-07-14）**；⚠ **WP1-2R 後端已完成（2026-07-14，§3.2）——鐵則 3 紅線解除、真求解器、雙引擎 smoke-test 11/11，UIA 互動驗收待補**；⚠ **WP1-0R2 後端已完成（2026-07-14，§3.3）——FreeCAD adapter 達 22/22 parity、三範例雙引擎 rebuild 成功，桌面 UIA smoke-test 待補**；⚠ **WP-S1 後端已完成（2026-07-14，§3.4）——C#↔Python 契約對稱、datum 真 BREP 解析＋雙引擎草圖平面＋真選面 UI、假綠與家務清理，UIA 互動驗收待補**；下一包＝**WP-H1 殘項**（§3.5，真 gateway 端到端）／或一次補齊 WP1-2R／WP1-0R2／WP-S1 累積的 UIA 驗收。
 >
 > **每個工作包都是獨立可發包單位**：發包時把該節全文＋§1 現況＋§2 地雷＋§9 驗證方法論一起給執行模型，不得省略。
 
@@ -133,7 +133,7 @@
 | 0 | ~~WP-ENV0 環境與測試基礎修復~~（§3.1） | 無 | ✅ 完成（2026-07-14） |
 | 1 | **WP1-2R 真求解器**（§3.2） | WP-ENV0 | ⚠ 後端完成（2026-07-14）／UIA 互動驗收待補——解除鐵則 3 紅線 |
 | 2 | **WP1-0R2 FreeCAD 特徵 parity**（§3.3） | WP1-2R 後端（已滿足） | ⚠ 後端完成（2026-07-14）／桌面 UIA smoke-test 待補——22/22 特徵＋誠實矩陣 |
-| 3 | **WP-S1 契約同步＋WP1-3 收尾**（§3.4）／可與 1、2 並行 | WP-ENV0 | C#↔Python↔schema 對稱、datum 去佔位、假綠清理、檔案家務 |
+| 3 | **WP-S1 契約同步＋WP1-3 收尾**（§3.4） | WP-ENV0 | ⚠ 後端完成（2026-07-14）／UIA 互動驗收待補——C#↔Python↔schema 對稱、datum 真 BREP 解析、假綠清理 |
 | 4 | **WP-H1 殘項：真 gateway 端到端＋Gate 補強**（§3.5） | WP-ENV0 | tests/prompts 真實化、vertical-slice step 2/9 補強 |
 | 5 | Phase 2 各包（§4，發包前出終稿）→ Phase 3（§5）→ Phase 4（§6） | 0–4 全過 | — |
 
@@ -220,29 +220,36 @@
 - ⬜ freecad 桌面 UIA smoke-test PASS（未跑，見上）
 - ✅ LIMITATIONS.md 與實作逐條相符（含誠實揭露的四項共通簡化）
 
-### 3.4 WP-S1：契約同步＋WP1-3 收尾（小刀多把，可並行）
+### 3.4 WP-S1：契約同步＋WP1-3 收尾 ✅ 完成（2026-07-14）／UIA 互動驗收待補
 
 **契約對稱**（Addendum §2.3——範圍比 07-12 盤點大）：
-1. C# `CommandValidator.cs` 補 **14 型** input 驗證（WP1-6 六型＋sweep/loft/mirror/linear_pattern/circular_pattern/boolean×3），必填參數規則與 Python `REQUIRED_PARAMS` 對齊。
-2. `update_feature` 有效欄位 C# 補 `constraints`（現況：Python 放行、C# 誤擋）。
-3. `plane.base` 三方對齊：C# validator＋`feature.schema.json` enum 補 `datum:<id>` 形式（LLM prompt 已在教模型輸出它）。
-4. C# validator 補 `create/update/delete_reference_geometry` 三個 action case。
-5. LLM planSchema（`LlmProviderBase.cs:124`）移除 datum_plane/axis/point 三型（改由 reference_geometry 流程走）。
-6. `feature.schema.json` 的 reference_geometry 定義接上頂層 `$ref` 或移到獨立 schema 檔（與實際存檔格式對齊）。
-7. reorder_feature UI 接線（右鍵上移/下移即可，拖曳可後補）。
+1. ✅ C# `CommandValidator.cs` 補 **14 型** input 驗證（WP1-6 六型＋sweep/loft/mirror/linear_pattern/circular_pattern/boolean×3），必填參數規則與 Python `REQUIRED_PARAMS` 對齊（`RequiresInput`/`RequiredParams` 靜態表＋泛用數值正負檢查，不再按型別窄範圍檢查）。
+2. ✅ `update_feature` 有效欄位 C# 補 `constraints`（`CadCommand.Constraints` 本來就有欄位，只是 `ValidateUpdateFeature` 的 null 檢查漏了它）。
+3. ✅ `plane.base` 三方對齊：C# validator＋`feature.schema.json`＋LLM planSchema 都補上 `datum:<id>` 形式（schema 用 `oneOf`，C#/planSchema 用字串前綴檢查）。
+4. ✅ C# validator 補 `create/update/delete_reference_geometry` 三個 action case（`CadCommand` 新增 `ReferenceGeometry` 欄位）。
+5. ⚠ **範圍決定（偏離原文字）**：LLM planSchema 的 `datum_plane`/`datum_axis`/`datum_point` **沒有移除**——複查發現這 3 個字串是 `MainViewModel.ExecutePlanAsync` 故意用的路由鍵（`step.FeatureType.StartsWith("datum_")` → 呼叫 `CreateReferenceGeometryAsync`，不進 `create_feature` 管線），prompt 也明確教 LLM 輸出它們。真的從 enum 移除會讓結構化輸出直接擋掉這些合法 datum 步驟，打斷現正運作的「LLM 一句話建基準面」路徑——這是會製造回歸的改法，故保留不動，只在程式碼加註解說明前因後果。若要真正走 `action=create_reference_geometry`（已支援），需要同時改 `DesignStep` 資料結構＋prompt＋路由邏輯，是獨立的設計工作。
+6. ✅ `feature.schema.json` 補齊頂層 `bodies`／`reference_geometry`／`rollback_position`／`global_variables`／`configurations`／`custom_properties`（原本只有 `schema_version`+`features`，`reference_geometry` 的 definition 從未被 `$ref` 引用，與 `feature_graph.py` 實際存檔格式完全對不上）。
+7. ✅ reorder_feature UI 接線：右鍵選單新增「上移／下移」，`MoveFeatureUpCommand`/`MoveFeatureDownCommand`（`new_order` = 目前 order ± 1，依賴衝突交給 Worker 的既有檢查）；拖曳排序未做（原規劃即可後補）。
 
 **WP1-3 收尾（datum 去佔位）**：
-8. `_resolve_face`／`_resolve_vertex` 接真 BREP＋display_map（`reference_geometry_builder.py`）；build123d derived_geometry 補完（`server.py:1378` 自承未接線）。
-9. FreeCAD 引擎 datum 草圖面（現退回 XY）。
-10. UI datum 建立對話框真選面（接 FaceSelected，去掉硬編 `face:f1.top`+10mm）。
+8. ✅ `_resolve_face`／`_resolve_vertex` 改接真 BREP：透過 `topology.resolve_reference()`（WP0-4 既有的語意化查詢引擎）解析，取代原本「不管模型多大、"top" 永遠回傳 origin=[0,0,10]」的硬編數字。**加碼修正兩個連帶 bug**：(a) `_face_normal_matches` 原本直接拿 FreeCAD 的字串 geom_type 跟 build123d 的 enum 比較，freecad 引擎下永遠判定不是平面；(b) `_resolve_face_reference` 的 `source_feature_id` 過濾原本假設 `trace.faces_created_by()` 回傳 Face 物件，但 freecad 版的 trace 回傳的是面索引（int），比對永遠失敗——這兩個都是導致 freecad 引擎下任何帶 `source_feature_id` 的語意查詢直接判「參照不存在」的根因，一併修好。`_resolve_vertex` 因 `topology.py` 尚無 vertex 級查詢，誠實回傳 None（未解析），不再假裝是原點。**已知限制**：解析用的是「上一輪 rebuild」的 part/trace（`server.py` 新增 `proj["trace"]` 快取），不是本輪即時建構結果——首輪 rebuild 前 derived_geometry 必然留空，這是需要把 datum 解析交錯進 adapter 逐特徵迴圈才能根治的架構問題，本次未做。
+9. ✅ FreeCAD 引擎 datum 草圖面：原本 datum 分支只確認 id 存在就當 XY 處理（"未來可以從 reference_geometry 取得更精確的變換矩陣" 的 TODO 從未補上）。改為真的解析 derived_geometry 的 origin/normal，用標準的「選參考向量→兩次外積」建出正交座標系（`_resolve_datum_plane_transform`），與 build123d 的 `Plane(origin=..., z_dir=...)` 同一種數學想法（繞法向量的旋轉角兩邊各自獨立計算，不保證逐位元一致，但形狀本身不受影響）。雙引擎端到端測試（base box→datum offset 5mm→該面上再 pad）驗證兩引擎結果一致。
+10. ✅ UI datum 建立對話框真選面：原本硬編 `"face:f1.top"` + 10mm（"f1" 幾乎不會是真實特徵 id）。改為「按下後進入待選狀態→3D 視窗點一個面→用該面的 `source_feature_id`+`centroid`（viewer.html/ViewerBridge 新增 centroid 欄位）建立 datum」，Python 端新增 `face_centroid:<id>:<x,y,z>` 參照格式（靠 `resolve_reference` 既有的 centroid_hint 就近比對）。**殘留項**：偏移量目前固定 0（與所選面重合，是合法用法，但還沒有讓使用者輸入非零偏移的數值 UI）；datum 平面也還沒接進屬性面板供事後調整——這兩塊是比「選面」更大的獨立 UI 工作，留待後續。
 
 **假綠與家務**：
-11. `test_llm_convergence.py:71` 恆真斷言改寫；模擬 plan 案例標註「非端到端」（端到端歸 §3.5）。
-12. ~~根目錄 `FreeCAD_Packaging_Notes.md` 撞名檔~~ ✅ 2026-07-13 已處理：內容經比對全含於 `Documemt/FreeCAD_Packaging_Notes.md`，已刪；同批移除 `Documemt/Dispatch_WP1-0R_20260711.md`（一次性發包單，任務已結）與根目錄 `FREECAD_TEST_RESULTS.md`（與 `WP1-0R_Report.md` 矛盾的誤導快照，矛盾事實已記錄於 Review 07-12 §4）。
-13. `tests/geometry`、`tests/unit`、`tests/golden-models` 三空目錄：刪除或放 README 說明用途。
-14. build123d `_build_draft`（no-op）與 `_build_variable_fillet`（退化單半徑）：在 capability/catalog 標 partial（禁止 LLM 靜默使用），或實作。
+11. ✅ `test_llm_convergence.py:71` 恆真斷言（`assert has_arbitrary and has_no_questions`——兩個布林值都讀自它自己剛寫的 dict，恆真）：由於「不得用任意預設值取代提問」這條規則目前只在 prompt 文字層面要求、沒有對應的程式硬檢查函式可測，改為明確 `pytest.skip` 並附完整理由，不再用恆真斷言假裝已驗證。同時在檔案 docstring 加註：本檔多數案例是拿手寫 dict 自我斷言，**非端到端**（真 gateway 端到端歸 §3.5）。
+12. ✅ 已於 07-13 完成（見下方原記錄，未變動）。
+13. ✅ `tests/geometry`、`tests/unit`、`tests/golden-models`：確認皆為空且未被 git 追蹤，直接刪除（無需 README，未來若要用再建）。
+14. ✅ `draft`/`variable_fillet`（及加碼一起處理的 `shell`/`thin`/`countersink`——WP1-0R2 發現這幾型兩引擎現況一致地簡化，非單一引擎落後）：`/api/capability` 的 feature_catalog 每個型別加 `status`（"full"/"partial"）與 `limitation` 說明欄位，LLM 每次呼叫都能看到限制，不會誤以為功能完整。
 
-**驗收**：C#↔Python validator 對稱測試（同一命令兩端判定一致，≥14 案例）；datum 在雙引擎下開草圖 pad bbox 正確；UIA 選面建 datum；恆真斷言消失；`git status` 乾淨。
+**回歸驗證（2026-07-14 實跑）**：系統 Python 929 passed/70 skipped；cp311 980 passed/2 skipped；`dotnet test` 164/164（新增 CommandValidator 對稱測試 26 案例，遠超 ≥14 判準）。
+
+**驗收**（打勾者已完成）：
+- ✅ C#↔Python validator 對稱測試（26 案例，遠超 ≥14 判準）
+- ✅ datum 在雙引擎下開草圖 pad bbox 正確（`TestDatumPlaneSketchBuild123d`/`TestDatumPlaneSketchFreeCAD`）
+- ⬜ UIA 選面建 datum（機制已接線＋單元測試驗證，但未實際啟動桌面 App 用滑鼠點選跑過——與 WP1-2R/WP1-0R2 留下的 UIA 驗收缺口同性質，待後續一起補）
+- ✅ 恆真斷言消失
+- ✅ `git status` 乾淨（commit 後）
 
 ### 3.5 WP-H1 殘項：真 gateway 端到端＋Gate 補強
 

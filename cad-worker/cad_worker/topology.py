@@ -200,12 +200,26 @@ def _resolve_face_reference(
         raise ReferenceLostError(ref, "無法取得面列表")
 
     # source_feature_id 篩選——只查詢由該特徵產生的面
+    #
+    # WP-S1 修復：build123d 的 TopologyTrace.faces_created_by() 回傳的是
+    # 「Face 物件清單」，freecad 的卻是「面索引（int）清單」——兩邊格式
+    # 不一樣，原本這裡一律用 `_faces_equal(f, tf)`（Face vs Face 比較）
+    # 去比對，對 freecad 來說等於拿 Face 物件跟整數比較，`is_equal()` 內部
+    # 出例外被 `except Exception: return False` 吞掉，篩選結果永遠是空
+    # 集合——freecad 引擎下任何帶 source_feature_id 的語意查詢（包含 datum
+    # 平面 offset 解析）都會直接判定「參照不存在」。改為先偵測
+    # trace_faces 裡裝的是索引還是物件，兩種都能正確比對。
     source_fid = ref.get("source_feature_id", "")
     if source_fid and trace is not None:
         trace_faces = trace.faces_created_by(source_fid)
         if trace_faces:
-            # 使用 is_equal 比較
-            faces = [f for f in faces if any(_faces_equal(f, tf) for tf in trace_faces)]
+            if all(isinstance(tf, int) for tf in trace_faces):
+                # freecad：索引比對（FreeCADFaceProxy 有 _index 屬性）
+                idx_set = set(trace_faces)
+                faces = [f for f in faces if getattr(f, "_index", None) in idx_set]
+            else:
+                # build123d：Face 物件比對
+                faces = [f for f in faces if any(_faces_equal(f, tf) for tf in trace_faces)]
 
     # surface_type 篩選
     st = filters.get("surface_type")
@@ -344,10 +358,17 @@ from .adapters.build123d_adapter import _faces_equal  # noqa: E402
 
 
 def _face_normal_matches(face: Any, expected_normal: list[float]) -> bool:
-    """檢查平面面的法向量是否匹配。"""
+    """檢查平面面的法向量是否匹配。
+
+    WP-S1 修復：原本直接拿 `face.geom_type` 跟 build123d 的 `GeomType.PLANE`
+    enum 比較——FreeCADFaceProxy.geom_type 回傳的是字串（"PLANE"），永遠不等於
+    這個 enum，導致帶 normal filter 的語意查詢（如 datum 的 top_planar_face
+    intent）在 freecad 引擎下一律判定不是平面、篩選結果永遠是空集合。改用
+    `_geom_type_to_str` 統一轉換（與 exporters/display_map 同一張對照表），
+    兩引擎都能正確判斷。
+    """
     try:
-        from build123d import GeomType
-        if face.geom_type != GeomType.PLANE:
+        if _geom_type_to_str(face.geom_type) != "plane":
             return False
         # 取面法向量
         normal = face.normal_at()

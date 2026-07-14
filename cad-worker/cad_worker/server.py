@@ -610,6 +610,7 @@ async def apply_plan(project_id: str, req: ApplyPlanRequest, _: None = Depends(v
     # 4. Commit——全部成功才取代原 graph
     proj["graph"] = staging
     proj["part"] = part
+    proj["trace"] = build_result.trace
 
     # 儲存 features.json
     staging.save(proj["dir"] / "features.json")
@@ -669,7 +670,8 @@ async def _commit_graph_mutation(proj: dict[str, Any], req: ApplyCommandRequest,
     # staging 重建驗證（CPU-bound 丟 thread，事件迴圈不凍結）
     # WP1-0R 地雷 #17: 全域序列化——FreeCAD Document 非線程安全
     try:
-        _rebuild_reference_geometry(staging, {})
+        # WP-S1：沿用 proj 目前快取的 part/trace 解析 datum（見 _rebuild_dry_run 同款修復）
+        _rebuild_reference_geometry(staging, proj)
         adapter = _get_adapter()
         async with _rebuild_lock:
             build_result = await asyncio.to_thread(adapter.build_with_trace, staging)
@@ -681,6 +683,7 @@ async def _commit_graph_mutation(proj: dict[str, Any], req: ApplyCommandRequest,
     # commit
     proj["graph"] = staging
     proj["part"] = build_result.part
+    proj["trace"] = build_result.trace
     staging.save(proj["dir"] / "features.json")
     _save_revision(proj, req)
     return extra if isinstance(extra, dict) else {}
@@ -714,6 +717,7 @@ async def reset_project(project_id: str, _: None = Depends(verify_token)) -> dic
     proj = _get_project(project_id)
     proj["graph"] = FeatureGraph()
     proj["part"] = None
+    proj["trace"] = None
 
     # 清除舊的 mesh cache——否則 export/preview 會回傳清除前的舊幾何
     proj["display_map"] = None
@@ -747,6 +751,7 @@ async def rebuild(project_id: str, dry_run: bool = False, _: None = Depends(veri
     import copy
     graph_snapshot = copy.deepcopy(proj["graph"].to_dict())
     part_snapshot = proj.get("part")
+    trace_snapshot = proj.get("trace")
     mesh_rev_snapshot = proj.get("mesh_revision", 0)
     # display_map 只會被整包取代、不會就地修改——保留參考即可，免去大型深拷貝
     display_map_snapshot = proj.get("display_map")
@@ -761,6 +766,7 @@ async def rebuild(project_id: str, dry_run: bool = False, _: None = Depends(veri
         # WP-H2: 超時 rollback——graph 不變，確保不污染 production version
         proj["graph"] = FeatureGraph.from_dict(graph_snapshot)
         proj["part"] = part_snapshot
+        proj["trace"] = trace_snapshot
         proj["mesh_revision"] = mesh_rev_snapshot
         proj["display_map"] = display_map_snapshot
         raise HTTPException(
@@ -788,6 +794,18 @@ _FEATURE_PARAM_HINTS: dict[str, list[str]] = {
     "variable_fillet": ["radii", "edge_selector", "radius"],
     "countersink": ["diameter", "countersink_diameter", "countersink_angle_deg", "positions"],
     "cosmetic_thread": ["diameter", "pitch", "depth", "positions"],
+}
+
+# WP-S1（Master Plan §3.4 item 14）：這幾型兩個引擎目前都只有簡化實作
+# ——不是「沒做」，是做了但跟名稱暗示的能力有落差，見
+# FREECAD_ADAPTER_LIMITATIONS.md 的誠實矩陣。標成 partial 讓 LLM／使用者
+# 在下單前就知道限制，不是等到量出來的幾何跟預期不符才發現。
+_PARTIAL_FEATURE_NOTES: dict[str, str] = {
+    "draft": "目前為 no-op：不會真的施加拔模角，幾何不變。",
+    "variable_fillet": "目前退化成單一半徑（只取 radii[0]），不是逐點真正變化的圓角。",
+    "shell": "目前是整個實體均勻向內收縮，不是有開口、真正中空的殼——沒有開口面可挑。",
+    "thin": "拉伸後的薄殼步驟繼承 shell 的限制（均勻收縮，非真正開口薄殼）。",
+    "countersink": "沉頭部分目前用直筒圓柱模擬，不是真正的錐形沉頭。",
 }
 
 
@@ -823,7 +841,12 @@ async def get_capability(_: None = Depends(verify_token)) -> dict[str, Any]:
             "（可用 OPENCAD_SCHEMAS_DIR 環境變數指定 schemas 目錄）",
         )
     catalog = [
-        {"type": t, "parameters": _FEATURE_PARAM_HINTS.get(t, [])}
+        {
+            "type": t,
+            "parameters": _FEATURE_PARAM_HINTS.get(t, []),
+            "status": "partial" if t in _PARTIAL_FEATURE_NOTES else "full",
+            **({"limitation": _PARTIAL_FEATURE_NOTES[t]} if t in _PARTIAL_FEATURE_NOTES else {}),
+        }
         for t in type_enum
     ]
     # Unsupported features (LLM 拒絕規則)
@@ -1107,6 +1130,7 @@ async def undo(project_id: str, _: None = Depends(verify_token)) -> dict[str, An
         # 回到 revision 0（空白狀態——apply_plan 或 reset_project 前的起點）
         proj["graph"] = FeatureGraph()
         proj["part"] = None
+        proj["trace"] = None
         proj["_current_rev"] = 0
         return {"status": "ok", "current": 0}
 
@@ -1117,6 +1141,7 @@ async def undo(project_id: str, _: None = Depends(verify_token)) -> dict[str, An
     data = json.loads(rev_path.read_text(encoding="utf-8"))
     proj["graph"] = FeatureGraph.from_dict(data["graph"])
     proj["part"] = None  # 需重建
+    proj["trace"] = None
     proj["_current_rev"] = target
     return {"status": "ok", "current": target}
 
@@ -1136,6 +1161,7 @@ async def redo(project_id: str, _: None = Depends(verify_token)) -> dict[str, An
     data = json.loads(rev_path.read_text(encoding="utf-8"))
     proj["graph"] = FeatureGraph.from_dict(data["graph"])
     proj["part"] = None
+    proj["trace"] = None
     proj["_current_rev"] = target
     return {"status": "ok", "current": target}
 
@@ -1166,6 +1192,7 @@ async def restore_from_journal(project_id: str, _: None = Depends(verify_token))
     graph_data = latest.get("graph", {})
     proj["graph"] = FeatureGraph.from_dict(graph_data)
     proj["part"] = None  # 需重建
+    proj["trace"] = None
     clear_journal(project_dir)
     return {"status": "restored", "action": latest.get("action", "")}
 
@@ -1374,11 +1401,15 @@ async def update_reference_geometry(
 def _rebuild_reference_geometry(graph: FeatureGraph, proj: dict[str, Any]) -> None:
     """重建基準幾何——計算 derived_geometry（origin/normal/direction/point）。
 
-    簡化實作：offset datum plane 基於來源面的法向量偏移；
-    其他類型留 derived_geometry 為空（build123d adapter 未完整接線）。
+    WP-S1：offset/mid_plane/angle_between/cylinder_axis/intersection/center
+    現在都透過 `topology.resolve_reference()` 查真實 BREP（`proj["part"]`／
+    `proj["trace"]`，即上一輪 rebuild 的結果——見
+    `reference_geometry_builder.py` 模組文件的「一輪落後」限制）。專案剛
+    建立、還沒有任何一輪成功 rebuild 時，`proj` 裡沒有 part/trace，
+    derived_geometry 會留空，等第一輪 rebuild 完成後才能正確解析。
     """
     from .reference_geometry_builder import build_reference_geometry
-    build_reference_geometry(graph)
+    build_reference_geometry(graph, proj.get("part"), proj.get("trace"))
 
 
 # ─── 內部方法 ───
@@ -1406,6 +1437,7 @@ async def _rebuild(project_id: str, proj: dict[str, Any]) -> dict[str, Any]:
         part = build_result.part
         proj["part"] = part
         trace = build_result.trace
+        proj["trace"] = trace
 
         # 儲存 Feature Graph
         graph.save(proj_dir / "features.json")
@@ -1491,7 +1523,11 @@ async def _rebuild_dry_run(project_id: str, proj: dict[str, Any]) -> dict[str, A
     # 深拷貝 graph 以免污染正式版本
     graph_backup = copy.deepcopy(graph)
     try:
-        _rebuild_reference_geometry(graph_backup, {})
+        # WP-S1：沿用目前 proj 已快取的 part/trace（上一輪真正 rebuild 的結果）
+        # 來解析 datum 面，而不是永遠當成「沒有上一輪」——dry-run 才能真的
+        # 試出 datum 相關的重建結果，不然每次 dry-run 的 derived_geometry
+        # 都會是空的，測不出東西。
+        _rebuild_reference_geometry(graph_backup, proj)
         adapter = _get_adapter()
         # WP1-0R 地雷 #17: 全域序列化——FreeCAD Document 非線程安全
         async with _rebuild_lock:

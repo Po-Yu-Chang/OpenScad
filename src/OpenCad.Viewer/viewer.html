@@ -417,6 +417,7 @@
                                 brep_face_ref: faceEntry.brep_face_ref,
                                 source_feature_id: faceEntry.source_feature_id,
                                 mesh_revision: currentMeshRevision,
+                                centroid: faceEntry.centroid,
                             });
                             document.getElementById('highlight-indicator').textContent =
                                 `已選取面: ${faceEntry.surface_type} (${faceEntry.source_feature_id})`;

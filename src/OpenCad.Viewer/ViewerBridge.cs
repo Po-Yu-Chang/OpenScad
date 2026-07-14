@@ -35,6 +35,7 @@ public class ViewerBridge
         string? DatumPlaneName = null,
         string? BrepFaceRef = null,
         string? SourceFeatureId = null,
+        double[]? Centroid = null,
         int MeshRevision = 0,
         string? MeasurementType = null,
         double MeasurementValue = 0,
@@ -103,6 +104,18 @@ public class ViewerBridge
                 ? element.TryGetProperty("mesh_revision", out var mrev) ? mrev.GetInt32() : 0
                 : 0;
 
+            // WP-S1：datum 平面「真選面」需要點選面的質心座標
+            double[]? centroid = null;
+            if (type == MessageType.FaceSelected &&
+                element.TryGetProperty("centroid", out var centroidEl) &&
+                centroidEl.ValueKind == JsonValueKind.Array)
+            {
+                var vals = new List<double>();
+                foreach (var item in centroidEl.EnumerateArray())
+                    vals.Add(item.GetDouble());
+                if (vals.Count == 3) centroid = vals.ToArray();
+            }
+
             string? measurementType = null;
             double measurementValue = 0;
             string? measurementUnit = null;
@@ -120,7 +133,7 @@ public class ViewerBridge
                 measurementDescription = element.TryGetProperty("description", out var md) ? md.GetString() : null;
             }
 
-            return new ViewerMessage(type.Value, objectId, errorMsg, featureId, entitiesJson, constraintsJson, datumPlaneName, brepFaceRef, sourceFeatureId, meshRevision,
+            return new ViewerMessage(type.Value, objectId, errorMsg, featureId, entitiesJson, constraintsJson, datumPlaneName, brepFaceRef, sourceFeatureId, centroid, meshRevision,
                 measurementType, measurementValue, measurementUnit, measurementDescription);
         }
         catch
