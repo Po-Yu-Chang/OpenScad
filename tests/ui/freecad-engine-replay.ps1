@@ -15,6 +15,7 @@ WP1-0R: FreeCAD 引擎 HTTP 重演驗收腳本
 前置：
   tools\setup-freecad-python.ps1 已執行
   系統 Python 3.12 含 build123d
+#>
 
 param(
     [string]$FreeCadPython = ""
@@ -67,8 +68,9 @@ $serverProcess = Start-Process -FilePath $FreeCadPython `
     -WorkingDirectory (Join-Path $repoRoot "cad-worker")
 
 # 蝑? token 瑼??箇
+# 首次載入 OCP/trimesh DLL 可能觸發 Defender 掃描（實測冷啟動 >200s），等待上限放寬至 300s
 $tokenFound = $false
-for ($i = 0; $i -lt 30; $i++) {
+for ($i = 0; $i -lt 300; $i++) {
     Start-Sleep -Seconds 1
     if (Test-Path $env:OPENCAD_TOKEN_FILE) {
         $token = (Get-Content $env:OPENCAD_TOKEN_FILE -Raw).Trim()

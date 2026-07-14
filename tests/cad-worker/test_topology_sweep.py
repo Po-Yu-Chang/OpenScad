@@ -10,6 +10,8 @@ Tests:
 7. v2 edge reference resolution (outer_vertical_edges)
 8. Backward compatibility: old edge selector DSL still works
 """
+from __future__ import annotations
+
 import pytest
 import math
 from dataclasses import dataclass
